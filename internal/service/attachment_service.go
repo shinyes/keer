@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
@@ -21,6 +22,12 @@ type AttachmentService struct {
 	store   *store.SQLStore
 	storage storage.Store
 }
+
+const (
+	attachmentNanoIDLength    = 8
+	attachmentStorageKeyTries = 8
+	attachmentNanoIDAlphabet  = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+)
 
 func NewAttachmentService(s *store.SQLStore, fileStorage storage.Store) *AttachmentService {
 	return &AttachmentService{
@@ -79,7 +86,7 @@ func (s *AttachmentService) CreateAttachment(ctx context.Context, userID int64, 
 		storageKey = existing.StorageKey
 		size = existing.Size
 	} else {
-		storageKey, err = buildAttachmentStorageKey(userID, filename, contentHash)
+		storageKey, err = s.newAttachmentStorageKey(ctx, userID, filename)
 		if err != nil {
 			return models.Attachment{}, err
 		}
@@ -208,17 +215,42 @@ func (s *AttachmentService) attachToMemo(ctx context.Context, memoID int64, atta
 	return s.store.SetMemoAttachments(ctx, memoID, attachmentIDs)
 }
 
-func buildAttachmentStorageKey(userID int64, filename string, contentHash string) (string, error) {
-	hash := strings.TrimSpace(strings.ToLower(contentHash))
-	if len(hash) != 64 {
-		return "", fmt.Errorf("invalid content hash")
-	}
-	for _, ch := range hash {
-		if (ch < '0' || ch > '9') && (ch < 'a' || ch > 'f') {
-			return "", fmt.Errorf("invalid content hash")
+func (s *AttachmentService) newAttachmentStorageKey(ctx context.Context, userID int64, filename string) (string, error) {
+	for i := 0; i < attachmentStorageKeyTries; i++ {
+		nanoID, err := generateNanoID(attachmentNanoIDLength)
+		if err != nil {
+			return "", err
+		}
+		key := buildAttachmentStorageKey(userID, nanoID, filename)
+		count, err := s.store.CountAttachmentsByStorageKey(ctx, key)
+		if err != nil {
+			return "", err
+		}
+		if count == 0 {
+			return key, nil
 		}
 	}
-	return fmt.Sprintf("attachments/%d/%s/%s_%s", userID, hash[:2], hash, filename), nil
+	return "", fmt.Errorf("failed to allocate unique attachment storage key")
+}
+
+func buildAttachmentStorageKey(userID int64, nanoID string, filename string) string {
+	return fmt.Sprintf("attachments/%d/%s_%s", userID, nanoID, filename)
+}
+
+func generateNanoID(length int) (string, error) {
+	if length <= 0 {
+		return "", fmt.Errorf("invalid nano id length")
+	}
+	alphabet := attachmentNanoIDAlphabet
+	buf := make([]byte, length)
+	randBytes := make([]byte, length)
+	if _, err := rand.Read(randBytes); err != nil {
+		return "", fmt.Errorf("generate nano id: %w", err)
+	}
+	for i := 0; i < length; i++ {
+		buf[i] = alphabet[int(randBytes[i])%len(alphabet)]
+	}
+	return string(buf), nil
 }
 
 func storageTypeName(s storage.Store) string {

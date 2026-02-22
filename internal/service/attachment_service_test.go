@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -42,32 +43,29 @@ func TestParseMemoID_CompatibilityFormats(t *testing.T) {
 }
 
 func TestBuildAttachmentStorageKey_Format(t *testing.T) {
-	const hash = "9eeb410cd359fd0d435f6914adf86000f5b8ffac9d5ec100ba9f70f5cd5cb788"
-	key, err := buildAttachmentStorageKey(1, "16848.jpg", hash)
-	if err != nil {
-		t.Fatalf("buildAttachmentStorageKey() error = %v", err)
-	}
-
-	if !strings.HasPrefix(key, "attachments/1/9e/") {
-		t.Fatalf("unexpected key prefix: %s", key)
-	}
-	parts := strings.Split(key, "/")
-	if len(parts) != 4 {
+	key := buildAttachmentStorageKey(1, "a1B2cD3e", "16848.jpg")
+	if key != "attachments/1/a1B2cD3e_16848.jpg" {
 		t.Fatalf("unexpected key format: %s", key)
-	}
-
-	filePart := parts[3]
-	if filePart != hash+"_16848.jpg" {
-		t.Fatalf("unexpected file part: %s", filePart)
 	}
 }
 
-func TestBuildAttachmentStorageKey_InvalidHash(t *testing.T) {
-	_, err := buildAttachmentStorageKey(1, "16848.jpg", "bad-hash")
+func TestGenerateNanoID_Format(t *testing.T) {
+	id, err := generateNanoID(attachmentNanoIDLength)
 	if err != nil {
-		return
+		t.Fatalf("generateNanoID() error = %v", err)
 	}
-	t.Fatal("expected invalid content hash error")
+	if len(id) != attachmentNanoIDLength {
+		t.Fatalf("unexpected nano id length: got %d", len(id))
+	}
+	if ok, _ := regexp.MatchString(`^[0-9A-Za-z]{8}$`, id); !ok {
+		t.Fatalf("unexpected nano id format: %s", id)
+	}
+}
+
+func TestGenerateNanoID_InvalidLength(t *testing.T) {
+	if _, err := generateNanoID(0); err == nil {
+		t.Fatal("expected invalid length error")
+	}
 }
 
 func TestCreateAttachment_DeduplicateStorageSameContent(t *testing.T) {
@@ -102,6 +100,12 @@ func TestCreateAttachment_DeduplicateStorageSameContent(t *testing.T) {
 	}
 	if first.StorageKey != second.StorageKey {
 		t.Fatalf("expected shared storage key for same content, got first=%q second=%q", first.StorageKey, second.StorageKey)
+	}
+	if !strings.HasPrefix(first.StorageKey, "attachments/") {
+		t.Fatalf("unexpected storage key prefix: %q", first.StorageKey)
+	}
+	if ok, _ := regexp.MatchString(`^attachments/\d+/[0-9A-Za-z]{8}_`, first.StorageKey); !ok {
+		t.Fatalf("unexpected storage key format: %q", first.StorageKey)
 	}
 	list, err := services.store.ListAttachmentsByCreator(context.Background(), user.ID)
 	if err != nil {
