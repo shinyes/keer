@@ -70,7 +70,7 @@ func TestBuildAttachmentStorageKey_InvalidHash(t *testing.T) {
 	t.Fatal("expected invalid content hash error")
 }
 
-func TestCreateAttachment_DeduplicateSameContent(t *testing.T) {
+func TestCreateAttachment_DeduplicateStorageSameContent(t *testing.T) {
 	services := setupTestServices(t)
 	localStore, err := storage.NewLocalStore(filepath.Join(t.TempDir(), "uploads"))
 	if err != nil {
@@ -97,19 +97,22 @@ func TestCreateAttachment_DeduplicateSameContent(t *testing.T) {
 		t.Fatalf("second CreateAttachment() error = %v", err)
 	}
 
-	if first.ID != second.ID {
-		t.Fatalf("expected deduplicated attachment id, got first=%d second=%d", first.ID, second.ID)
+	if first.ID == second.ID {
+		t.Fatalf("expected distinct attachment ids, got same id=%d", first.ID)
+	}
+	if first.StorageKey != second.StorageKey {
+		t.Fatalf("expected shared storage key for same content, got first=%q second=%q", first.StorageKey, second.StorageKey)
 	}
 	list, err := services.store.ListAttachmentsByCreator(context.Background(), user.ID)
 	if err != nil {
 		t.Fatalf("ListAttachmentsByCreator() error = %v", err)
 	}
-	if len(list) != 1 {
-		t.Fatalf("expected single stored attachment, got %d", len(list))
+	if len(list) != 2 {
+		t.Fatalf("expected two attachment records, got %d", len(list))
 	}
 }
 
-func TestCreateAttachment_DedupForDifferentFilename(t *testing.T) {
+func TestCreateAttachment_DedupStorageForDifferentFilename(t *testing.T) {
 	services := setupTestServices(t)
 	localStore, err := storage.NewLocalStore(filepath.Join(t.TempDir(), "uploads"))
 	if err != nil {
@@ -136,14 +139,66 @@ func TestCreateAttachment_DedupForDifferentFilename(t *testing.T) {
 		t.Fatalf("second CreateAttachment() error = %v", err)
 	}
 
-	if first.ID != second.ID {
-		t.Fatalf("expected deduplicated attachment id for same content, got first=%d second=%d", first.ID, second.ID)
+	if first.ID == second.ID {
+		t.Fatalf("expected distinct attachment ids for different uploads")
+	}
+	if first.StorageKey != second.StorageKey {
+		t.Fatalf("expected shared storage key for same content, got first=%q second=%q", first.StorageKey, second.StorageKey)
 	}
 	list, err := services.store.ListAttachmentsByCreator(context.Background(), user.ID)
 	if err != nil {
 		t.Fatalf("ListAttachmentsByCreator() error = %v", err)
 	}
+	if len(list) != 2 {
+		t.Fatalf("expected two attachment records, got %d", len(list))
+	}
+}
+
+func TestDeleteAttachment_KeepFileWhenSharedStorageKey(t *testing.T) {
+	services := setupTestServices(t)
+	localStore, err := storage.NewLocalStore(filepath.Join(t.TempDir(), "uploads"))
+	if err != nil {
+		t.Fatalf("NewLocalStore() error = %v", err)
+	}
+	attachmentService := NewAttachmentService(services.store, localStore)
+	user := mustCreateUser(t, services.store, "attach-delete-shared")
+
+	content := base64.StdEncoding.EncodeToString([]byte("same-image-bytes"))
+	first, err := attachmentService.CreateAttachment(context.Background(), user.ID, CreateAttachmentInput{
+		Filename: "a.jpg",
+		Type:     "image/jpeg",
+		Content:  content,
+	})
+	if err != nil {
+		t.Fatalf("first CreateAttachment() error = %v", err)
+	}
+	second, err := attachmentService.CreateAttachment(context.Background(), user.ID, CreateAttachmentInput{
+		Filename: "b.jpg",
+		Type:     "image/jpeg",
+		Content:  content,
+	})
+	if err != nil {
+		t.Fatalf("second CreateAttachment() error = %v", err)
+	}
+	if first.StorageKey != second.StorageKey {
+		t.Fatalf("expected shared storage key, got first=%q second=%q", first.StorageKey, second.StorageKey)
+	}
+
+	if err := attachmentService.DeleteAttachment(context.Background(), user.ID, first.ID); err != nil {
+		t.Fatalf("DeleteAttachment() error = %v", err)
+	}
+
+	_, rc, err := attachmentService.OpenAttachment(context.Background(), second.ID)
+	if err != nil {
+		t.Fatalf("OpenAttachment() error = %v", err)
+	}
+	_ = rc.Close()
+
+	list, err := services.store.ListAttachmentsByCreator(context.Background(), user.ID)
+	if err != nil {
+		t.Fatalf("ListAttachmentsByCreator() error = %v", err)
+	}
 	if len(list) != 1 {
-		t.Fatalf("expected single stored attachment, got %d", len(list))
+		t.Fatalf("expected one remaining attachment record, got %d", len(list))
 	}
 }

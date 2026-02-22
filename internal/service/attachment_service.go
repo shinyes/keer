@@ -71,25 +71,26 @@ func (s *AttachmentService) CreateAttachment(ctx context.Context, userID int64, 
 	if err != nil {
 		return models.Attachment{}, err
 	}
+
+	var storageKey string
+	var size int64
+	uploaded := false
 	if found {
-		if memoID != nil {
-			if err := s.attachToMemo(ctx, *memoID, existing.ID); err != nil {
-				return models.Attachment{}, err
-			}
+		storageKey = existing.StorageKey
+		size = existing.Size
+	} else {
+		storageKey, err = buildAttachmentStorageKey(userID, filename, contentHash)
+		if err != nil {
+			return models.Attachment{}, err
 		}
-		return existing, nil
+		size, err = s.storage.Put(ctx, storageKey, contentType, data)
+		if err != nil {
+			return models.Attachment{}, err
+		}
+		uploaded = true
 	}
 
-	storageKey, err := buildAttachmentStorageKey(userID, filename, contentHash)
-	if err != nil {
-		return models.Attachment{}, err
-	}
-	size, err := s.storage.Put(ctx, storageKey, contentType, data)
-	if err != nil {
-		return models.Attachment{}, err
-	}
-
-	attachment, _, err := s.store.CreateAttachmentIfAbsent(
+	attachment, err := s.store.CreateAttachment(
 		ctx,
 		userID,
 		filename,
@@ -101,6 +102,9 @@ func (s *AttachmentService) CreateAttachment(ctx context.Context, userID int64, 
 		storageKey,
 	)
 	if err != nil {
+		if uploaded {
+			_ = s.storage.Delete(ctx, storageKey)
+		}
 		return models.Attachment{}, err
 	}
 
@@ -125,8 +129,15 @@ func (s *AttachmentService) DeleteAttachment(ctx context.Context, userID int64, 
 	if attachment.CreatorID != userID {
 		return sql.ErrNoRows
 	}
-	if err := s.storage.Delete(ctx, attachment.StorageKey); err != nil {
+
+	refCount, err := s.store.CountAttachmentsByStorageKey(ctx, attachment.StorageKey)
+	if err != nil {
 		return err
+	}
+	if refCount <= 1 {
+		if err := s.storage.Delete(ctx, attachment.StorageKey); err != nil {
+			return err
+		}
 	}
 	return s.store.DeleteAttachment(ctx, attachmentID)
 }

@@ -779,25 +779,11 @@ func (s *SQLStore) UpdateMemoPayload(ctx context.Context, memoID int64, payload 
 }
 
 func (s *SQLStore) CreateAttachment(ctx context.Context, creatorID int64, filename string, externalLink string, fileType string, size int64, contentHash string, storageType string, storageKey string) (models.Attachment, error) {
-	attachment, _, err := s.CreateAttachmentIfAbsent(ctx, creatorID, filename, externalLink, fileType, size, contentHash, storageType, storageKey)
-	return attachment, err
-}
-
-func (s *SQLStore) CreateAttachmentIfAbsent(ctx context.Context, creatorID int64, filename string, externalLink string, fileType string, size int64, contentHash string, storageType string, storageKey string) (models.Attachment, bool, error) {
-	existing, found, err := s.FindAttachmentByContentHash(ctx, creatorID, contentHash)
-	if err != nil {
-		return models.Attachment{}, false, err
-	}
-	if found {
-		return existing, false, nil
-	}
-
 	now := time.Now().UTC()
 	res, err := s.db.ExecContext(
 		ctx,
 		`INSERT INTO attachments (creator_id, filename, external_link, type, size, content_hash, storage_type, storage_key, create_time)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(creator_id, content_hash) DO NOTHING`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		creatorID,
 		filename,
 		externalLink,
@@ -809,31 +795,17 @@ func (s *SQLStore) CreateAttachmentIfAbsent(ctx context.Context, creatorID int64
 		now.Format(time.RFC3339Nano),
 	)
 	if err != nil {
-		return models.Attachment{}, false, err
-	}
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return models.Attachment{}, false, err
-	}
-	if affected == 0 {
-		existing, found, findErr := s.FindAttachmentByContentHash(ctx, creatorID, contentHash)
-		if findErr != nil {
-			return models.Attachment{}, false, findErr
-		}
-		if found {
-			return existing, false, nil
-		}
-		return models.Attachment{}, false, sql.ErrNoRows
+		return models.Attachment{}, err
 	}
 	id, err := res.LastInsertId()
 	if err != nil {
-		return models.Attachment{}, false, err
+		return models.Attachment{}, err
 	}
 	attachment, err := s.GetAttachmentByID(ctx, id)
 	if err != nil {
-		return models.Attachment{}, false, err
+		return models.Attachment{}, err
 	}
-	return attachment, true, nil
+	return attachment, nil
 }
 
 func (s *SQLStore) FindAttachmentByContentHash(ctx context.Context, creatorID int64, contentHash string) (models.Attachment, bool, error) {
@@ -963,6 +935,14 @@ func (s *SQLStore) ListAttachmentsByCreator(ctx context.Context, creatorID int64
 func (s *SQLStore) DeleteAttachment(ctx context.Context, attachmentID int64) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM attachments WHERE id = ?`, attachmentID)
 	return err
+}
+
+func (s *SQLStore) CountAttachmentsByStorageKey(ctx context.Context, storageKey string) (int64, error) {
+	var count int64
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM attachments WHERE storage_key = ?`, storageKey).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 func (s *SQLStore) SetMemoAttachments(ctx context.Context, memoID int64, attachmentIDs []int64) error {

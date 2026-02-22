@@ -59,7 +59,7 @@ func Migrate(db *sql.DB) error {
 			FOREIGN KEY(creator_id) REFERENCES users(id) ON DELETE CASCADE
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_attachments_creator ON attachments(creator_id);`,
-		`CREATE UNIQUE INDEX IF NOT EXISTS idx_attachments_creator_hash ON attachments(creator_id, content_hash);`,
+		`CREATE INDEX IF NOT EXISTS idx_attachments_creator_hash ON attachments(creator_id, content_hash);`,
 		`CREATE TABLE IF NOT EXISTS memo_attachments (
 			memo_id INTEGER NOT NULL,
 			attachment_id INTEGER NOT NULL,
