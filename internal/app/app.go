@@ -19,6 +19,7 @@ type Container struct {
 	Config            config.Config
 	Store             *store.SQLStore
 	UserService       *service.UserService
+	StorageService    *service.StorageSettingsService
 	MemoService       *service.MemoService
 	AttachmentService *service.AttachmentService
 	Router            *fiber.App
@@ -40,6 +41,14 @@ func Build(ctx context.Context, cfg config.Config) (*Container, func() error, er
 
 	sqlStore := store.New(sqliteDB)
 	userService := service.NewUserService(sqlStore)
+	storageService := service.NewStorageSettingsService(sqlStore)
+	resolvedStorage, err := storageService.Resolve(ctx)
+	if err != nil {
+		_ = cleanup()
+		return nil, nil, fmt.Errorf("resolve storage settings: %w", err)
+	}
+	cfg.Storage = resolvedStorage.Backend
+	cfg.S3 = resolvedStorage.S3
 	if err := userService.EnsureBootstrap(ctx, cfg.BootstrapUser, cfg.BootstrapToken); err != nil {
 		_ = cleanup()
 		return nil, nil, fmt.Errorf("bootstrap setup: %w", err)
@@ -76,6 +85,7 @@ func Build(ctx context.Context, cfg config.Config) (*Container, func() error, er
 		Config:            cfg,
 		Store:             sqlStore,
 		UserService:       userService,
+		StorageService:    storageService,
 		MemoService:       memoService,
 		AttachmentService: attachmentService,
 		Router:            router,

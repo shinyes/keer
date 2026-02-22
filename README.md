@@ -45,7 +45,6 @@ $env:BASE_URL="http://localhost:8080"
 $env:DB_PATH="./data/keer.db"
 $env:UPLOADS_DIR="./data/uploads"
 $env:MEMOS_VERSION="0.26.1"
-$env:STORAGE_BACKEND="local"
 
 # 首次联调用的引导账号与令牌
 $env:BOOTSTRAP_USER="demo"
@@ -56,19 +55,24 @@ go run ./cmd/server
 
 Android 端将服务地址配置为：`http://<你的主机>:8080/`，Token 配置为 `demo-token`。
 
-## 快速启动（S3 存储）
+## 快速配置（S3 存储）
 
 ```powershell
-$env:STORAGE_BACKEND="s3"
-$env:S3_ENDPOINT="https://<你的S3地址>"
-$env:S3_REGION="auto"
-$env:S3_BUCKET="memos"
-$env:S3_ACCESS_KEY_ID="<access-key-id>"
-$env:S3_ACCESS_KEY_SECRET="<access-key-secret>"
-$env:S3_USE_PATH_STYLE="true"
-
-# 其余变量同本地模式
+# 存储配置持久化在数据库，不再使用 STORAGE_BACKEND/S3_* 环境变量
 go run ./cmd/server
+# 进入 keer> 控制台后执行：
+storage wizard
+
+# 或使用参数方式：
+storage set-s3 `
+  --endpoint "https://<你的S3地址>" `
+  --region "auto" `
+  --bucket "memos" `
+  --access-key-id "<access-key-id>" `
+  --access-key-secret "<access-key-secret>" `
+  --use-path-style=true
+
+# 切换后需重启服务生效
 ```
 
 ## 环境变量说明
@@ -79,16 +83,15 @@ go run ./cmd/server
 - `UPLOADS_DIR`：本地附件目录，默认 `./data/uploads`（仅 local 模式使用）
 - `HTTP_BODY_LIMIT_MB`：HTTP 请求体大小上限（MiB），默认 `64`（建议保留默认以兼容较大附件的 Base64 上传）
 - `MEMOS_VERSION`：`/api/v1/instance/profile` 返回版本，默认 `0.26.1`
-- `STORAGE_BACKEND`：`local` 或 `s3`，默认 `local`
-- `S3_ENDPOINT`：S3 端点地址
-- `S3_REGION`：S3 区域
-- `S3_BUCKET`：S3 Bucket 名称
-- `S3_ACCESS_KEY_ID`：S3 Access Key ID
-- `S3_ACCESS_KEY_SECRET`：S3 Access Key Secret
-- `S3_USE_PATH_STYLE`：是否 path style，默认 `true`
 - `ALLOW_REGISTRATION`：是否允许公开注册，默认 `true`
 - `BOOTSTRAP_USER`：引导用户名，默认 `demo`
 - `BOOTSTRAP_TOKEN`：引导令牌，默认空（为空则不创建引导令牌）
+
+说明：
+
+- 存储方式与 S3 配置统一保存在数据库 `system_settings` 中
+- 新库默认 `storage_backend=local`
+- 可通过运行时控制台 `storage ...` 命令维护存储配置
 
 ## 已实现 API
 
@@ -239,43 +242,44 @@ Content-Type: application/json
 
 回填历史 memo 的 payload（tags + property）：
 
-```powershell
-go run ./cmd/server admin memo rebuild-payload
+```text
+memo rebuild-payload
 ```
 
 ## 运维命令（后台管理）
 
-后端二进制支持 `admin` 子命令，可在不改代码的情况下做常见运维：
+后端仅支持默认启动方式（`go run ./cmd/server`），并始终开启运行时控制台；运维命令统一在控制台执行。
 
 ### 运行时命令模式（服务运行中执行）
 
-如果你希望在**服务运行时**直接执行命令，可开启控制台模式：
+默认启动即进入控制台模式：
 
 ```powershell
-go run ./cmd/server serve --console
+go run ./cmd/server
 ```
 
-启动后可在同一终端输入命令（无需前缀 `admin`），例如：
+启动后可在同一终端输入命令，例如：
 
 ```text
 user create alice alice-password
 token create alice --ttl 30d
 token list alice
 registration disable
+storage status
 ```
 
 输入 `help` 查看命令，输入 `exit` 退出控制台（不会停止 HTTP 服务）。
 
 ### 1) 后台创建用户
 
-```powershell
-go run ./cmd/server admin user create <username> <password> [display_name] [role]
+```text
+user create <username> <password> [display_name] [role]
 ```
 
 示例：
 
-```powershell
-go run ./cmd/server admin user create alice alice-password Alice USER
+```text
+user create alice alice-password Alice USER
 ```
 
 说明：
@@ -286,18 +290,18 @@ go run ./cmd/server admin user create alice alice-password Alice USER
 
 ### 2) 为用户生成 Access Token
 
-```powershell
-go run ./cmd/server admin token create <username_or_id> [description] [--ttl 7d|24h] [--expires-at 2026-12-31T23:59:59Z]
+```text
+token create <username_or_id> [description] [--ttl 7d|24h] [--expires-at 2026-12-31T23:59:59Z]
 ```
 
 示例：
 
-```powershell
-go run ./cmd/server admin token create alice "mobile token"
-go run ./cmd/server admin token create 1
-go run ./cmd/server admin token create alice --ttl 30d
-go run ./cmd/server admin token create alice --ttl 720h
-go run ./cmd/server admin token create alice --expires-at 2026-12-31T23:59:59Z
+```text
+token create alice "mobile token"
+token create 1
+token create alice --ttl 30d
+token create alice --ttl 720h
+token create alice --expires-at 2026-12-31T23:59:59Z
 ```
 
 说明：
@@ -312,14 +316,14 @@ go run ./cmd/server admin token create alice --expires-at 2026-12-31T23:59:59Z
 
 ### 2.1) 查看用户的 Access Token 列表
 
-```powershell
-go run ./cmd/server admin token list <username_or_id>
+```text
+token list <username_or_id>
 ```
 
 示例：
 
-```powershell
-go run ./cmd/server admin token list alice
+```text
+token list alice
 ```
 
 说明：
@@ -329,14 +333,14 @@ go run ./cmd/server admin token list alice
 
 ### 2.2) 撤销 Access Token
 
-```powershell
-go run ./cmd/server admin token revoke <token_id>
+```text
+token revoke <token_id>
 ```
 
 示例：
 
-```powershell
-go run ./cmd/server admin token revoke 12
+```text
+token revoke 12
 ```
 
 说明：
@@ -346,16 +350,39 @@ go run ./cmd/server admin token revoke 12
 
 ### 3) 动态允许/禁止注册
 
-```powershell
-go run ./cmd/server admin registration status
-go run ./cmd/server admin registration enable
-go run ./cmd/server admin registration disable
+```text
+registration status
+registration enable
+registration disable
 ```
 
 说明：
 
 - 该开关持久化在数据库中，修改后立即影响 `POST /api/v1/users` 行为
 - 若数据库中没有该设置，则回退到环境变量 `ALLOW_REGISTRATION`
+
+### 4) 动态配置存储后端（数据库持久化）
+
+```text
+storage status
+storage set-local
+storage wizard
+storage set-s3 `
+  --endpoint "https://<你的S3地址>" `
+  --region "auto" `
+  --bucket "memos" `
+  --access-key-id "<access-key-id>" `
+  --access-key-secret "<access-key-secret>" `
+  --use-path-style=true
+```
+
+说明：
+
+- 以上配置会写入 `system_settings` 表
+- `storage wizard` 会以交互方式逐项提示输入 S3 配置
+- 也可使用 `set-s3 --interactive` 进入交互模式（可搭配部分参数预填默认值）
+- `storage status` 会显示当前生效的存储配置（密钥会脱敏展示）
+- 修改后端类型后需要重启服务，新的存储实现才会生效
 
 ## 测试
 

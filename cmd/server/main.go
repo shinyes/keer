@@ -26,36 +26,23 @@ import (
 func main() {
 	args := os.Args[1:]
 	if len(args) == 0 {
-		runServe(nil)
+		runServe([]string{"--console"})
 		return
 	}
 
-	switch args[0] {
-	case "serve":
-		runServe(args[1:])
-	case "admin":
-		if err := runAdmin(args[1:]); err != nil {
-			log.Fatal(err)
-		}
-	case "memo":
-		// Backward-compatible shorthand for: server admin memo ...
-		if err := runAdmin(args); err != nil {
-			log.Fatal(err)
-		}
-	case "help", "-h", "--help":
-		printUsage()
-	default:
-		printUsage()
-		os.Exit(2)
-	}
+	printUsage()
+	log.Fatalf("unsupported args %q, only default startup is allowed", strings.Join(args, " "))
 }
 
 func runServe(args []string) {
 	serveFlagSet := flag.NewFlagSet("serve", flag.ContinueOnError)
 	serveFlagSet.SetOutput(io.Discard)
-	consoleMode := serveFlagSet.Bool("console", false, "enable runtime admin console")
+	consoleMode := serveFlagSet.Bool("console", true, "enable runtime admin console")
 	if err := serveFlagSet.Parse(args); err != nil {
 		log.Fatalf("parse serve args: %v", err)
+	}
+	if !*consoleMode {
+		log.Fatal("serve must run with --console=true")
 	}
 
 	cfg, err := config.Load()
@@ -69,15 +56,15 @@ func runServe(args []string) {
 	}
 	defer cleanup() //nolint:errcheck
 
-	log.Printf("keer backend listening on %s (storage=%s)", cfg.Addr, cfg.Storage)
+	log.Printf("keer backend listening on %s (storage=%s)", container.Config.Addr, container.Config.Storage)
 	if cfg.BootstrapToken != "" {
 		log.Printf("bootstrap token enabled for user=%s", cfg.BootstrapUser)
 	}
 	if *consoleMode {
 		log.Printf("runtime admin console enabled")
-		go runRuntimeConsole(cfg, container.UserService, container.MemoService)
+		go runRuntimeConsole(cfg, container.UserService, container.StorageService, container.MemoService)
 	}
-	log.Fatal(container.Router.Listen(cfg.Addr))
+	log.Fatal(container.Router.Listen(container.Config.Addr))
 }
 
 func runAdmin(args []string) error {
@@ -105,10 +92,11 @@ func runAdmin(args []string) error {
 	md := markdown.NewService()
 	memoService := service.NewMemoService(sqlStore, md)
 	userService := service.NewUserService(sqlStore)
-	return executeAdminCommand(context.Background(), cfg.AllowRegistration, userService, memoService, args)
+	storageService := service.NewStorageSettingsService(sqlStore)
+	return executeAdminCommand(context.Background(), cfg.AllowRegistration, userService, storageService, memoService, args, os.Stdin)
 }
 
-func executeAdminCommand(ctx context.Context, allowRegistrationFallback bool, userService *service.UserService, memoService *service.MemoService, args []string) error {
+func executeAdminCommand(ctx context.Context, allowRegistrationFallback bool, userService *service.UserService, storageService *service.StorageSettingsService, memoService *service.MemoService, args []string, interactiveInput io.Reader) error {
 	switch args[0] {
 	case "memo":
 		if len(args) < 2 {
@@ -133,33 +121,40 @@ func executeAdminCommand(ctx context.Context, allowRegistrationFallback bool, us
 		return runAdminToken(ctx, userService, args[1:])
 	case "registration":
 		return runAdminRegistration(ctx, userService, allowRegistrationFallback, args[1:])
+	case "storage":
+		return runAdminStorage(ctx, storageService, args[1:], interactiveInput)
 	default:
 		printUsage()
 		return fmt.Errorf("unknown admin command: %s", args[0])
 	}
 }
 
-func runRuntimeConsole(cfg config.Config, userService *service.UserService, memoService *service.MemoService) {
+func runRuntimeConsole(cfg config.Config, userService *service.UserService, storageService *service.StorageSettingsService, memoService *service.MemoService) {
 	fmt.Println("Runtime Console: 输入命令，示例：user create demo demo-pass")
 	fmt.Println("Runtime Console: 输入 help 查看命令，输入 exit 退出控制台（不会停止服务）")
 
-	scanner := bufio.NewScanner(os.Stdin)
+	reader := bufio.NewReader(os.Stdin)
 	for {
 		fmt.Print("keer> ")
-		if !scanner.Scan() {
-			if err := scanner.Err(); err != nil {
-				fmt.Printf("console read error: %v\n", err)
-			}
+		lineRaw, readErr := reader.ReadString('\n')
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			fmt.Printf("console read error: %v\n", readErr)
 			return
 		}
-		line := strings.TrimSpace(scanner.Text())
+		line := strings.TrimSpace(lineRaw)
+		if errors.Is(readErr, io.EOF) && line == "" {
+			return
+		}
 		if line == "" {
+			if errors.Is(readErr, io.EOF) {
+				return
+			}
 			continue
 		}
 
-		parsed, err := parseCommandLine(line)
-		if err != nil {
-			fmt.Printf("parse command error: %v\n", err)
+		parsed, parseErr := parseCommandLine(line)
+		if parseErr != nil {
+			fmt.Printf("parse command error: %v\n", parseErr)
 			continue
 		}
 		if len(parsed) == 0 {
@@ -181,8 +176,11 @@ func runRuntimeConsole(cfg config.Config, userService *service.UserService, memo
 			}
 		}
 
-		if err := executeAdminCommand(context.Background(), cfg.AllowRegistration, userService, memoService, parsed); err != nil {
+		if err := executeAdminCommand(context.Background(), cfg.AllowRegistration, userService, storageService, memoService, parsed, reader); err != nil {
 			fmt.Printf("command failed: %v\n", err)
+		}
+		if errors.Is(readErr, io.EOF) {
+			return
 		}
 	}
 }
@@ -392,18 +390,149 @@ func runAdminRegistration(ctx context.Context, userService *service.UserService,
 	}
 }
 
+func runAdminStorage(ctx context.Context, storageService *service.StorageSettingsService, args []string, interactiveInput io.Reader) error {
+	if len(args) < 1 {
+		printUsage()
+		return fmt.Errorf("usage: admin storage <status|set-local|set-s3|wizard>")
+	}
+
+	switch args[0] {
+	case "status":
+		resolved, err := storageService.Resolve(ctx)
+		if err != nil {
+			return fmt.Errorf("read storage setting failed: %w", err)
+		}
+		fmt.Printf("storage_backend=%s\n", resolved.Backend)
+		if resolved.Backend == config.StorageBackendS3 {
+			fmt.Printf("storage_s3_endpoint=%s\n", resolved.S3.Endpoint)
+			fmt.Printf("storage_s3_region=%s\n", resolved.S3.Region)
+			fmt.Printf("storage_s3_bucket=%s\n", resolved.S3.Bucket)
+			fmt.Printf("storage_s3_access_key_id=%s\n", maskSecret(resolved.S3.AccessKeyID))
+			fmt.Printf("storage_s3_access_key_secret=%s\n", maskSecret(resolved.S3.AccessSecret))
+			fmt.Printf("storage_s3_use_path_style=%t\n", resolved.S3.UsePathStyle)
+		}
+		return nil
+	case "set-local":
+		if err := storageService.SetLocal(ctx); err != nil {
+			return fmt.Errorf("set storage backend local failed: %w", err)
+		}
+		fmt.Println("storage_backend=local")
+		fmt.Println("note: restart server to apply storage backend change")
+		return nil
+	case "set-s3":
+		return runAdminStorageSetS3(ctx, storageService, args[1:], interactiveInput)
+	case "wizard":
+		return runAdminStorageWizard(ctx, storageService, interactiveInput)
+	default:
+		printUsage()
+		return fmt.Errorf("unknown storage subcommand: %s", args[0])
+	}
+}
+
+func runAdminStorageSetS3(ctx context.Context, storageService *service.StorageSettingsService, args []string, interactiveInput io.Reader) error {
+	flagSet := flag.NewFlagSet("admin storage set-s3", flag.ContinueOnError)
+	flagSet.SetOutput(io.Discard)
+	endpoint := flagSet.String("endpoint", "", "S3 endpoint")
+	region := flagSet.String("region", "", "S3 region")
+	bucket := flagSet.String("bucket", "", "S3 bucket")
+	accessKeyID := flagSet.String("access-key-id", "", "S3 access key id")
+	accessKeySecret := flagSet.String("access-key-secret", "", "S3 access key secret")
+	usePathStyleRaw := flagSet.String("use-path-style", "", "S3 use path style (true/false), default true")
+	interactiveMode := flagSet.Bool("interactive", false, "interactive prompt for S3 settings")
+	if err := flagSet.Parse(args); err != nil {
+		return fmt.Errorf("parse storage args failed: %w", err)
+	}
+	if len(flagSet.Args()) > 0 {
+		return fmt.Errorf("unexpected positional args: %s", strings.Join(flagSet.Args(), " "))
+	}
+
+	usePathStyle := true
+	usePathStyleSet := false
+	if strings.TrimSpace(*usePathStyleRaw) != "" {
+		parsed, ok := parseBoolInput(*usePathStyleRaw)
+		if !ok {
+			return fmt.Errorf("invalid --use-path-style %q, expected true/false", *usePathStyleRaw)
+		}
+		usePathStyle = parsed
+		usePathStyleSet = true
+	}
+
+	seed := config.S3Config{
+		Endpoint:     strings.TrimSpace(*endpoint),
+		Region:       strings.TrimSpace(*region),
+		Bucket:       strings.TrimSpace(*bucket),
+		AccessKeyID:  strings.TrimSpace(*accessKeyID),
+		AccessSecret: strings.TrimSpace(*accessKeySecret),
+		UsePathStyle: usePathStyle,
+	}
+
+	if *interactiveMode {
+		return runAdminStorageSetS3Interactive(ctx, storageService, seed, usePathStyleSet, interactiveInput)
+	}
+
+	if err := storageService.SetS3(ctx, seed); err != nil {
+		return fmt.Errorf("set storage backend s3 failed: %w", err)
+	}
+
+	fmt.Println("storage_backend=s3")
+	fmt.Println("note: restart server to apply storage backend change")
+	return nil
+}
+
+func runAdminStorageWizard(ctx context.Context, storageService *service.StorageSettingsService, interactiveInput io.Reader) error {
+	return runAdminStorageSetS3Interactive(ctx, storageService, config.S3Config{}, false, interactiveInput)
+}
+
+func runAdminStorageSetS3Interactive(ctx context.Context, storageService *service.StorageSettingsService, seed config.S3Config, usePathStyleSeeded bool, interactiveInput io.Reader) error {
+	if interactiveInput == nil {
+		return fmt.Errorf("interactive input is not available")
+	}
+
+	defaults := config.S3Config{
+		Region:       "auto",
+		UsePathStyle: true,
+	}
+	if resolved, err := storageService.Resolve(ctx); err == nil && resolved.Backend == config.StorageBackendS3 {
+		defaults = resolved.S3
+	}
+
+	if seed.Endpoint != "" {
+		defaults.Endpoint = seed.Endpoint
+	}
+	if seed.Region != "" {
+		defaults.Region = seed.Region
+	}
+	if seed.Bucket != "" {
+		defaults.Bucket = seed.Bucket
+	}
+	if seed.AccessKeyID != "" {
+		defaults.AccessKeyID = seed.AccessKeyID
+	}
+	if seed.AccessSecret != "" {
+		defaults.AccessSecret = seed.AccessSecret
+	}
+	if usePathStyleSeeded {
+		defaults.UsePathStyle = seed.UsePathStyle
+	}
+
+	fmt.Println("S3 configuration wizard (values will be saved into database)")
+	cfg, err := collectInteractiveS3Config(interactiveInput, os.Stdout, defaults)
+	if err != nil {
+		return fmt.Errorf("interactive input failed: %w", err)
+	}
+	if err := storageService.SetS3(ctx, cfg); err != nil {
+		return fmt.Errorf("set storage backend s3 failed: %w", err)
+	}
+	fmt.Println("storage_backend=s3")
+	fmt.Println("note: restart server to apply storage backend change")
+	return nil
+}
+
 func printUsage() {
 	fmt.Println("Usage:")
 	fmt.Println("  go run ./cmd/server")
-	fmt.Println("  go run ./cmd/server serve [--console]")
-	fmt.Println("  go run ./cmd/server admin memo rebuild-payload")
-	fmt.Println("  go run ./cmd/server admin user create <username> <password> [display_name] [role]")
-	fmt.Println("  go run ./cmd/server admin token create <username_or_id> [description] [--ttl 7d|24h] [--expires-at 2026-12-31T23:59:59Z]")
-	fmt.Println("  go run ./cmd/server admin token list <username_or_id>")
-	fmt.Println("  go run ./cmd/server admin token revoke <token_id>")
-	fmt.Println("  go run ./cmd/server admin registration status")
-	fmt.Println("  go run ./cmd/server admin registration enable")
-	fmt.Println("  go run ./cmd/server admin registration disable")
+	fmt.Println("Note: no subcommands are allowed. Runtime console is always enabled.")
+	fmt.Println("Note: use runtime console commands for admin operations.")
 }
 
 func printRuntimeConsoleUsage() {
@@ -413,6 +542,7 @@ func printRuntimeConsoleUsage() {
 	fmt.Println("  token list <username_or_id>")
 	fmt.Println("  token revoke <token_id>")
 	fmt.Println("  registration status|enable|disable")
+	fmt.Println("  storage status|set-local|set-s3 ...|wizard")
 	fmt.Println("  memo rebuild-payload")
 	fmt.Println("  help")
 	fmt.Println("  exit")
@@ -423,6 +553,150 @@ func formatOptionalTime(t *time.Time) string {
 		return "-"
 	}
 	return t.UTC().Format(time.RFC3339)
+}
+
+func maskSecret(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "-"
+	}
+	if len(raw) <= 4 {
+		return "****"
+	}
+	return raw[:2] + "****" + raw[len(raw)-2:]
+}
+
+func collectInteractiveS3Config(input io.Reader, output io.Writer, defaults config.S3Config) (config.S3Config, error) {
+	if input == nil {
+		return config.S3Config{}, fmt.Errorf("interactive input is required")
+	}
+	if output == nil {
+		output = io.Discard
+	}
+	reader := bufio.NewReader(input)
+
+	endpoint, err := promptRequiredString(reader, output, "S3 endpoint", defaults.Endpoint)
+	if err != nil {
+		return config.S3Config{}, err
+	}
+	region, err := promptRequiredString(reader, output, "S3 region", defaults.Region)
+	if err != nil {
+		return config.S3Config{}, err
+	}
+	bucket, err := promptRequiredString(reader, output, "S3 bucket", defaults.Bucket)
+	if err != nil {
+		return config.S3Config{}, err
+	}
+	accessKeyID, err := promptRequiredString(reader, output, "S3 access key id", defaults.AccessKeyID)
+	if err != nil {
+		return config.S3Config{}, err
+	}
+	accessSecret, err := promptSecretString(reader, output, defaults.AccessSecret)
+	if err != nil {
+		return config.S3Config{}, err
+	}
+	usePathStyle, err := promptBoolString(reader, output, "S3 use path style", defaults.UsePathStyle)
+	if err != nil {
+		return config.S3Config{}, err
+	}
+
+	return config.S3Config{
+		Endpoint:     endpoint,
+		Region:       region,
+		Bucket:       bucket,
+		AccessKeyID:  accessKeyID,
+		AccessSecret: accessSecret,
+		UsePathStyle: usePathStyle,
+	}, nil
+}
+
+func promptRequiredString(reader *bufio.Reader, output io.Writer, label string, defaultValue string) (string, error) {
+	for {
+		if strings.TrimSpace(defaultValue) == "" {
+			fmt.Fprintf(output, "%s: ", label)
+		} else {
+			fmt.Fprintf(output, "%s [%s]: ", label, defaultValue)
+		}
+
+		raw, err := reader.ReadString('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return "", err
+		}
+		value := strings.TrimSpace(raw)
+		if value == "" {
+			value = strings.TrimSpace(defaultValue)
+		}
+		if value != "" {
+			return value, nil
+		}
+
+		fmt.Fprintln(output, "value cannot be empty")
+		if errors.Is(err, io.EOF) {
+			return "", fmt.Errorf("%s cannot be empty", label)
+		}
+	}
+}
+
+func promptSecretString(reader *bufio.Reader, output io.Writer, currentValue string) (string, error) {
+	hasCurrent := strings.TrimSpace(currentValue) != ""
+	for {
+		if hasCurrent {
+			fmt.Fprint(output, "S3 access key secret [leave empty to keep current]: ")
+		} else {
+			fmt.Fprint(output, "S3 access key secret: ")
+		}
+
+		raw, err := reader.ReadString('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return "", err
+		}
+		value := strings.TrimSpace(raw)
+		if value != "" {
+			return value, nil
+		}
+		if hasCurrent {
+			return strings.TrimSpace(currentValue), nil
+		}
+
+		fmt.Fprintln(output, "value cannot be empty")
+		if errors.Is(err, io.EOF) {
+			return "", fmt.Errorf("S3 access key secret cannot be empty")
+		}
+	}
+}
+
+func promptBoolString(reader *bufio.Reader, output io.Writer, label string, defaultValue bool) (bool, error) {
+	for {
+		fmt.Fprintf(output, "%s [true/false] (%t): ", label, defaultValue)
+		raw, err := reader.ReadString('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return false, err
+		}
+		value := strings.TrimSpace(raw)
+		if value == "" {
+			return defaultValue, nil
+		}
+		parsed, ok := parseBoolInput(value)
+		if ok {
+			return parsed, nil
+		}
+
+		fmt.Fprintln(output, "invalid value, expected true/false")
+		if errors.Is(err, io.EOF) {
+			return false, fmt.Errorf("%s expects true or false", label)
+		}
+	}
+}
+
+func parseBoolInput(raw string) (bool, bool) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1", "t", "true", "y", "yes", "on":
+		return true, true
+	case "0", "f", "false", "n", "no", "off":
+		return false, true
+	default:
+		return false, false
+	}
 }
 
 func parseTTL(raw string) (time.Duration, error) {

@@ -39,54 +39,35 @@ type Config struct {
 
 func Load() (Config, error) {
 	cfg := Config{
-		Addr:              env("APP_ADDR", ":8080"),
-		BaseURL:           strings.TrimRight(env("BASE_URL", "http://localhost:8080"), "/"),
+		Addr:              env("APP_ADDR", ":12843"),
+		BaseURL:           strings.TrimRight(env("BASE_URL", "http://localhost:12843"), "/"),
 		DBPath:            env("DB_PATH", "./data/keer.db"),
 		UploadsDir:        env("UPLOADS_DIR", "./data/uploads"),
 		BodyLimitMB:       envInt("HTTP_BODY_LIMIT_MB", 64),
 		Version:           env("MEMOS_VERSION", "0.26.1"),
-		Storage:           StorageBackend(strings.ToLower(env("STORAGE_BACKEND", "local"))),
+		Storage:           StorageBackendLocal,
 		AllowRegistration: envBool("ALLOW_REGISTRATION", true),
 		BootstrapUser:     env("BOOTSTRAP_USER", "demo"),
 		BootstrapToken:    env("BOOTSTRAP_TOKEN", ""),
-		S3: S3Config{
-			Endpoint:     env("S3_ENDPOINT", ""),
-			Region:       env("S3_REGION", ""),
-			Bucket:       env("S3_BUCKET", ""),
-			AccessKeyID:  env("S3_ACCESS_KEY_ID", ""),
-			AccessSecret: env("S3_ACCESS_KEY_SECRET", ""),
-			UsePathStyle: envBool("S3_USE_PATH_STYLE", true),
-		},
 	}
-
-	switch cfg.Storage {
-	case StorageBackendLocal:
-		return cfg, nil
-	case StorageBackendS3:
-		if err := cfg.S3.Validate(); err != nil {
-			return Config{}, err
-		}
-		return cfg, nil
-	default:
-		return Config{}, fmt.Errorf("unsupported storage backend %q", cfg.Storage)
-	}
+	return cfg, nil
 }
 
 func (c S3Config) Validate() error {
 	if c.Endpoint == "" {
-		return fmt.Errorf("S3_ENDPOINT is required when STORAGE_BACKEND=s3")
+		return fmt.Errorf("s3 endpoint is required when storage backend is s3")
 	}
 	if c.Region == "" {
-		return fmt.Errorf("S3_REGION is required when STORAGE_BACKEND=s3")
+		return fmt.Errorf("s3 region is required when storage backend is s3")
 	}
 	if c.Bucket == "" {
-		return fmt.Errorf("S3_BUCKET is required when STORAGE_BACKEND=s3")
+		return fmt.Errorf("s3 bucket is required when storage backend is s3")
 	}
 	if c.AccessKeyID == "" {
-		return fmt.Errorf("S3_ACCESS_KEY_ID is required when STORAGE_BACKEND=s3")
+		return fmt.Errorf("s3 access key id is required when storage backend is s3")
 	}
 	if c.AccessSecret == "" {
-		return fmt.Errorf("S3_ACCESS_KEY_SECRET is required when STORAGE_BACKEND=s3")
+		return fmt.Errorf("s3 access key secret is required when storage backend is s3")
 	}
 	return nil
 }
