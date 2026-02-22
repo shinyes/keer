@@ -3,8 +3,10 @@ package service
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -52,6 +54,8 @@ func (s *AttachmentService) CreateAttachment(ctx context.Context, userID int64, 
 	if err != nil {
 		return models.Attachment{}, fmt.Errorf("invalid base64 content")
 	}
+	contentHash := hashAttachmentContent(data)
+	contentSize := int64(len(data))
 
 	var memoID *int64
 	if input.MemoName != nil {
@@ -63,6 +67,19 @@ func (s *AttachmentService) CreateAttachment(ctx context.Context, userID int64, 
 			return models.Attachment{}, err
 		}
 		memoID = &id
+	}
+
+	existing, found, err := s.findExistingAttachmentByContent(ctx, userID, filename, contentType, contentSize, contentHash)
+	if err != nil {
+		return models.Attachment{}, err
+	}
+	if found {
+		if memoID != nil {
+			if err := s.attachToMemo(ctx, *memoID, existing.ID); err != nil {
+				return models.Attachment{}, err
+			}
+		}
+		return existing, nil
 	}
 
 	storageKey, err := buildAttachmentStorageKey(userID, filename)
@@ -90,16 +107,7 @@ func (s *AttachmentService) CreateAttachment(ctx context.Context, userID int64, 
 	}
 
 	if memoID != nil {
-		attachedMap, err := s.store.ListAttachmentsByMemoIDs(ctx, []int64{*memoID})
-		if err != nil {
-			return models.Attachment{}, err
-		}
-		attachmentIDs := make([]int64, 0, len(attachedMap[*memoID])+1)
-		for _, item := range attachedMap[*memoID] {
-			attachmentIDs = append(attachmentIDs, item.ID)
-		}
-		attachmentIDs = append(attachmentIDs, attachment.ID)
-		if err := s.store.SetMemoAttachments(ctx, *memoID, attachmentIDs); err != nil {
+		if err := s.attachToMemo(ctx, *memoID, attachment.ID); err != nil {
 			return models.Attachment{}, err
 		}
 	}
@@ -164,6 +172,61 @@ func sanitizeFilename(filename string) string {
 		return ""
 	}
 	return filename
+}
+
+func hashAttachmentContent(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+func hashAttachmentReader(r io.Reader) (string, error) {
+	h := sha256.New()
+	if _, err := io.Copy(h, r); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func (s *AttachmentService) findExistingAttachmentByContent(ctx context.Context, userID int64, filename string, contentType string, contentSize int64, wantHash string) (models.Attachment, bool, error) {
+	candidates, err := s.store.ListAttachmentCandidates(ctx, userID, filename, contentType, contentSize, 20)
+	if err != nil {
+		return models.Attachment{}, false, err
+	}
+	for _, candidate := range candidates {
+		rc, openErr := s.storage.Open(ctx, candidate.StorageKey)
+		if openErr != nil {
+			continue
+		}
+		gotHash, hashErr := hashAttachmentReader(rc)
+		closeErr := rc.Close()
+		if hashErr != nil || closeErr != nil {
+			continue
+		}
+		if gotHash == wantHash {
+			return candidate, true, nil
+		}
+	}
+	return models.Attachment{}, false, nil
+}
+
+func (s *AttachmentService) attachToMemo(ctx context.Context, memoID int64, attachmentID int64) error {
+	attachedMap, err := s.store.ListAttachmentsByMemoIDs(ctx, []int64{memoID})
+	if err != nil {
+		return err
+	}
+	attachmentIDs := make([]int64, 0, len(attachedMap[memoID])+1)
+	seen := make(map[int64]struct{}, len(attachedMap[memoID])+1)
+	for _, item := range attachedMap[memoID] {
+		if _, ok := seen[item.ID]; ok {
+			continue
+		}
+		attachmentIDs = append(attachmentIDs, item.ID)
+		seen[item.ID] = struct{}{}
+	}
+	if _, ok := seen[attachmentID]; !ok {
+		attachmentIDs = append(attachmentIDs, attachmentID)
+	}
+	return s.store.SetMemoAttachments(ctx, memoID, attachmentIDs)
 }
 
 func buildAttachmentStorageKey(userID int64, filename string) (string, error) {

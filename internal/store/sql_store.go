@@ -692,6 +692,39 @@ func (s *SQLStore) CreateAttachment(ctx context.Context, creatorID int64, filena
 	return s.GetAttachmentByID(ctx, id)
 }
 
+func (s *SQLStore) ListAttachmentCandidates(ctx context.Context, creatorID int64, filename string, fileType string, size int64, limit int) ([]models.Attachment, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT id, creator_id, filename, external_link, type, size, storage_type, storage_key, create_time
+		FROM attachments
+		WHERE creator_id = ? AND filename = ? AND type = ? AND size = ?
+		ORDER BY id DESC
+		LIMIT ?`,
+		creatorID,
+		filename,
+		fileType,
+		size,
+		limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make([]models.Attachment, 0)
+	for rows.Next() {
+		attachment, scanErr := scanAttachment(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		result = append(result, attachment)
+	}
+	return result, rows.Err()
+}
+
 func (s *SQLStore) GetAttachmentByID(ctx context.Context, id int64) (models.Attachment, error) {
 	var attachment models.Attachment
 	var createTime string

@@ -3,7 +3,6 @@ package db
 import (
 	"database/sql"
 	"fmt"
-	"strings"
 )
 
 func Migrate(db *sql.DB) error {
@@ -81,59 +80,5 @@ func Migrate(db *sql.DB) error {
 		}
 	}
 
-	hasPayload, err := hasColumn(db, "memos", "payload_json")
-	if err != nil {
-		return err
-	}
-	if !hasPayload {
-		if _, err := db.Exec(`ALTER TABLE memos ADD COLUMN payload_json TEXT NOT NULL DEFAULT '{}';`); err != nil {
-			return fmt.Errorf("add memos.payload_json: %w", err)
-		}
-	}
-
-	hasUserEmail, err := hasColumn(db, "users", "email")
-	if err != nil {
-		return err
-	}
-	if !hasUserEmail {
-		if _, err := db.Exec(`ALTER TABLE users ADD COLUMN email TEXT NOT NULL DEFAULT '';`); err != nil {
-			return fmt.Errorf("add users.email: %w", err)
-		}
-	}
-
-	hasUserPasswordHash, err := hasColumn(db, "users", "password_hash")
-	if err != nil {
-		return err
-	}
-	if !hasUserPasswordHash {
-		if _, err := db.Exec(`ALTER TABLE users ADD COLUMN password_hash TEXT NOT NULL DEFAULT '';`); err != nil {
-			return fmt.Errorf("add users.password_hash: %w", err)
-		}
-	}
-
 	return nil
-}
-
-func hasColumn(db *sql.DB, tableName string, columnName string) (bool, error) {
-	rows, err := db.Query(fmt.Sprintf(`PRAGMA table_info(%s);`, tableName))
-	if err != nil {
-		return false, fmt.Errorf("table info %s: %w", tableName, err)
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var cid int
-		var name string
-		var dataType string
-		var notNull int
-		var defaultValue sql.NullString
-		var pk int
-		if err := rows.Scan(&cid, &name, &dataType, &notNull, &defaultValue, &pk); err != nil {
-			return false, fmt.Errorf("scan table_info(%s): %w", tableName, err)
-		}
-		if strings.EqualFold(name, columnName) {
-			return true, nil
-		}
-	}
-	return false, rows.Err()
 }

@@ -1,8 +1,13 @@
 package service
 
 import (
+	"context"
+	"encoding/base64"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/shinyes/keer/internal/storage"
 )
 
 func TestParseMemoID_CompatibilityFormats(t *testing.T) {
@@ -76,5 +81,76 @@ func TestGenerateShortNanoID_Length(t *testing.T) {
 	}
 	if len(id) != 5 {
 		t.Fatalf("nanoid length got %d, want 5", len(id))
+	}
+}
+
+func TestCreateAttachment_DeduplicateSameContent(t *testing.T) {
+	services := setupTestServices(t)
+	localStore, err := storage.NewLocalStore(filepath.Join(t.TempDir(), "uploads"))
+	if err != nil {
+		t.Fatalf("NewLocalStore() error = %v", err)
+	}
+	attachmentService := NewAttachmentService(services.store, localStore)
+	user := mustCreateUser(t, services.store, "attach-dedupe")
+
+	content := base64.StdEncoding.EncodeToString([]byte("same-image-bytes"))
+	first, err := attachmentService.CreateAttachment(context.Background(), user.ID, CreateAttachmentInput{
+		Filename: "test.jpg",
+		Type:     "image/jpeg",
+		Content:  content,
+	})
+	if err != nil {
+		t.Fatalf("first CreateAttachment() error = %v", err)
+	}
+	second, err := attachmentService.CreateAttachment(context.Background(), user.ID, CreateAttachmentInput{
+		Filename: "test.jpg",
+		Type:     "image/jpeg",
+		Content:  content,
+	})
+	if err != nil {
+		t.Fatalf("second CreateAttachment() error = %v", err)
+	}
+
+	if first.ID != second.ID {
+		t.Fatalf("expected deduplicated attachment id, got first=%d second=%d", first.ID, second.ID)
+	}
+	list, err := services.store.ListAttachmentsByCreator(context.Background(), user.ID)
+	if err != nil {
+		t.Fatalf("ListAttachmentsByCreator() error = %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("expected single stored attachment, got %d", len(list))
+	}
+}
+
+func TestCreateAttachment_NoDedupForDifferentFilename(t *testing.T) {
+	services := setupTestServices(t)
+	localStore, err := storage.NewLocalStore(filepath.Join(t.TempDir(), "uploads"))
+	if err != nil {
+		t.Fatalf("NewLocalStore() error = %v", err)
+	}
+	attachmentService := NewAttachmentService(services.store, localStore)
+	user := mustCreateUser(t, services.store, "attach-no-dedupe")
+
+	content := base64.StdEncoding.EncodeToString([]byte("same-image-bytes"))
+	first, err := attachmentService.CreateAttachment(context.Background(), user.ID, CreateAttachmentInput{
+		Filename: "a.jpg",
+		Type:     "image/jpeg",
+		Content:  content,
+	})
+	if err != nil {
+		t.Fatalf("first CreateAttachment() error = %v", err)
+	}
+	second, err := attachmentService.CreateAttachment(context.Background(), user.ID, CreateAttachmentInput{
+		Filename: "b.jpg",
+		Type:     "image/jpeg",
+		Content:  content,
+	})
+	if err != nil {
+		t.Fatalf("second CreateAttachment() error = %v", err)
+	}
+
+	if first.ID == second.ID {
+		t.Fatalf("expected different attachment id for different filename")
 	}
 }
