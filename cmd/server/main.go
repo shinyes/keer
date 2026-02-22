@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"database/sql"
 	"errors"
@@ -25,13 +26,13 @@ import (
 func main() {
 	args := os.Args[1:]
 	if len(args) == 0 {
-		runServe()
+		runServe(nil)
 		return
 	}
 
 	switch args[0] {
 	case "serve":
-		runServe()
+		runServe(args[1:])
 	case "admin":
 		if err := runAdmin(args[1:]); err != nil {
 			log.Fatal(err)
@@ -49,7 +50,14 @@ func main() {
 	}
 }
 
-func runServe() {
+func runServe(args []string) {
+	serveFlagSet := flag.NewFlagSet("serve", flag.ContinueOnError)
+	serveFlagSet.SetOutput(io.Discard)
+	consoleMode := serveFlagSet.Bool("console", false, "enable runtime admin console")
+	if err := serveFlagSet.Parse(args); err != nil {
+		log.Fatalf("parse serve args: %v", err)
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("load config: %v", err)
@@ -64,6 +72,10 @@ func runServe() {
 	log.Printf("keer backend listening on %s (storage=%s)", cfg.Addr, cfg.Storage)
 	if cfg.BootstrapToken != "" {
 		log.Printf("bootstrap token enabled for user=%s", cfg.BootstrapUser)
+	}
+	if *consoleMode {
+		log.Printf("runtime admin console enabled")
+		go runRuntimeConsole(cfg, container.UserService, container.MemoService)
 	}
 	log.Fatal(container.Router.Listen(cfg.Addr))
 }
@@ -93,7 +105,10 @@ func runAdmin(args []string) error {
 	md := markdown.NewService()
 	memoService := service.NewMemoService(sqlStore, md)
 	userService := service.NewUserService(sqlStore)
+	return executeAdminCommand(context.Background(), cfg.AllowRegistration, userService, memoService, args)
+}
 
+func executeAdminCommand(ctx context.Context, allowRegistrationFallback bool, userService *service.UserService, memoService *service.MemoService, args []string) error {
 	switch args[0] {
 	case "memo":
 		if len(args) < 2 {
@@ -113,14 +128,62 @@ func runAdmin(args []string) error {
 			return fmt.Errorf("unknown admin subcommand: %s %s", args[0], args[1])
 		}
 	case "user":
-		return runAdminUser(context.Background(), userService, args[1:])
+		return runAdminUser(ctx, userService, args[1:])
 	case "token":
-		return runAdminToken(context.Background(), userService, args[1:])
+		return runAdminToken(ctx, userService, args[1:])
 	case "registration":
-		return runAdminRegistration(context.Background(), userService, cfg.AllowRegistration, args[1:])
+		return runAdminRegistration(ctx, userService, allowRegistrationFallback, args[1:])
 	default:
 		printUsage()
 		return fmt.Errorf("unknown admin command: %s", args[0])
+	}
+}
+
+func runRuntimeConsole(cfg config.Config, userService *service.UserService, memoService *service.MemoService) {
+	fmt.Println("Runtime Console: 输入命令，示例：user create demo demo-pass")
+	fmt.Println("Runtime Console: 输入 help 查看命令，输入 exit 退出控制台（不会停止服务）")
+
+	scanner := bufio.NewScanner(os.Stdin)
+	for {
+		fmt.Print("keer> ")
+		if !scanner.Scan() {
+			if err := scanner.Err(); err != nil {
+				fmt.Printf("console read error: %v\n", err)
+			}
+			return
+		}
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+
+		parsed, err := parseCommandLine(line)
+		if err != nil {
+			fmt.Printf("parse command error: %v\n", err)
+			continue
+		}
+		if len(parsed) == 0 {
+			continue
+		}
+
+		switch strings.ToLower(parsed[0]) {
+		case "help":
+			printRuntimeConsoleUsage()
+			continue
+		case "exit", "quit":
+			fmt.Println("runtime console closed")
+			return
+		case "admin":
+			parsed = parsed[1:]
+			if len(parsed) == 0 {
+				printRuntimeConsoleUsage()
+				continue
+			}
+		}
+
+		if err := executeAdminCommand(context.Background(), cfg.AllowRegistration, userService, memoService, parsed); err != nil {
+			fmt.Printf("command failed: %v\n", err)
+		}
 	}
 }
 
@@ -332,7 +395,7 @@ func runAdminRegistration(ctx context.Context, userService *service.UserService,
 func printUsage() {
 	fmt.Println("Usage:")
 	fmt.Println("  go run ./cmd/server")
-	fmt.Println("  go run ./cmd/server serve")
+	fmt.Println("  go run ./cmd/server serve [--console]")
 	fmt.Println("  go run ./cmd/server admin memo rebuild-payload")
 	fmt.Println("  go run ./cmd/server admin user create <username> <password> [display_name] [role]")
 	fmt.Println("  go run ./cmd/server admin token create <username_or_id> [description] [--ttl 7d|24h] [--expires-at 2026-12-31T23:59:59Z]")
@@ -341,6 +404,18 @@ func printUsage() {
 	fmt.Println("  go run ./cmd/server admin registration status")
 	fmt.Println("  go run ./cmd/server admin registration enable")
 	fmt.Println("  go run ./cmd/server admin registration disable")
+}
+
+func printRuntimeConsoleUsage() {
+	fmt.Println("Runtime Console Commands:")
+	fmt.Println("  user create <username> <password> [display_name] [role]")
+	fmt.Println("  token create <username_or_id> [description] [--ttl 7d|24h] [--expires-at 2026-12-31T23:59:59Z]")
+	fmt.Println("  token list <username_or_id>")
+	fmt.Println("  token revoke <token_id>")
+	fmt.Println("  registration status|enable|disable")
+	fmt.Println("  memo rebuild-payload")
+	fmt.Println("  help")
+	fmt.Println("  exit")
 }
 
 func formatOptionalTime(t *time.Time) string {
@@ -379,4 +454,50 @@ func parseTTL(raw string) (time.Duration, error) {
 	}
 
 	return 0, fmt.Errorf("unsupported ttl format")
+}
+
+func parseCommandLine(input string) ([]string, error) {
+	var args []string
+	var current strings.Builder
+	var quote rune
+
+	for _, r := range input {
+		switch r {
+		case '\'', '"':
+			if quote == 0 {
+				// Treat quotes as wrappers only at token start.
+				// Mid-token quotes like cyk'slife are parsed as literals.
+				if current.Len() == 0 {
+					quote = r
+					continue
+				}
+				current.WriteRune(r)
+				continue
+			}
+			if quote == r {
+				quote = 0
+				continue
+			}
+			current.WriteRune(r)
+		case ' ', '\t':
+			if quote != 0 {
+				current.WriteRune(r)
+				continue
+			}
+			if current.Len() > 0 {
+				args = append(args, current.String())
+				current.Reset()
+			}
+		default:
+			current.WriteRune(r)
+		}
+	}
+
+	if quote != 0 {
+		return nil, fmt.Errorf("unterminated quote")
+	}
+	if current.Len() > 0 {
+		args = append(args, current.String())
+	}
+	return args, nil
 }

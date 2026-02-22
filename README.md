@@ -245,6 +245,25 @@ go run ./cmd/server admin memo rebuild-payload
 
 后端二进制支持 `admin` 子命令，可在不改代码的情况下做常见运维：
 
+### 运行时命令模式（服务运行中执行）
+
+如果你希望在**服务运行时**直接执行命令，可开启控制台模式：
+
+```powershell
+go run ./cmd/server serve --console
+```
+
+启动后可在同一终端输入命令（无需前缀 `admin`），例如：
+
+```text
+user create alice alice-password
+token create alice --ttl 30d
+token list alice
+registration disable
+```
+
+输入 `help` 查看命令，输入 `exit` 退出控制台（不会停止 HTTP 服务）。
+
 ### 1) 后台创建用户
 
 ```powershell
