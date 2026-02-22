@@ -57,7 +57,12 @@ func (s *MemoService) CreateMemo(ctx context.Context, creatorID int64, input Cre
 		return MemoWithAttachments{}, err
 	}
 
-	memo, err := s.store.CreateMemo(
+	attachmentIDs, err := s.resolveAttachmentIDsFromNames(ctx, creatorID, input.AttachmentNames)
+	if err != nil {
+		return MemoWithAttachments{}, err
+	}
+
+	memo, err := s.store.CreateMemoWithAttachments(
 		ctx,
 		creatorID,
 		content,
@@ -66,16 +71,9 @@ func (s *MemoService) CreateMemo(ctx context.Context, creatorID int64, input Cre
 		false,
 		payload,
 		time.Now().UTC(),
+		attachmentIDs,
 	)
 	if err != nil {
-		return MemoWithAttachments{}, err
-	}
-
-	attachmentIDs, err := s.resolveAttachmentIDsFromNames(ctx, creatorID, input.AttachmentNames)
-	if err != nil {
-		return MemoWithAttachments{}, err
-	}
-	if err := s.store.SetMemoAttachments(ctx, memo.ID, attachmentIDs); err != nil {
 		return MemoWithAttachments{}, err
 	}
 	attachmentsMap, err := s.store.ListAttachmentsByMemoIDs(ctx, []int64{memo.ID})
@@ -125,19 +123,18 @@ func (s *MemoService) UpdateMemo(ctx context.Context, updaterID int64, memoID in
 		update.Pinned = input.Pinned
 	}
 
-	updatedMemo, err := s.store.UpdateMemo(ctx, memoID, update)
-	if err != nil {
-		return MemoWithAttachments{}, err
-	}
-
+	var attachmentIDs *[]int64
 	if input.AttachmentNames != nil {
-		attachmentIDs, err := s.resolveAttachmentIDsFromNames(ctx, updaterID, *input.AttachmentNames)
+		ids, err := s.resolveAttachmentIDsFromNames(ctx, updaterID, *input.AttachmentNames)
 		if err != nil {
 			return MemoWithAttachments{}, err
 		}
-		if err := s.store.SetMemoAttachments(ctx, memoID, attachmentIDs); err != nil {
-			return MemoWithAttachments{}, err
-		}
+		attachmentIDs = &ids
+	}
+
+	updatedMemo, err := s.store.UpdateMemoWithAttachments(ctx, memoID, update, attachmentIDs)
+	if err != nil {
+		return MemoWithAttachments{}, err
 	}
 
 	attachmentsMap, err := s.store.ListAttachmentsByMemoIDs(ctx, []int64{memoID})

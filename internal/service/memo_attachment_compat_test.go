@@ -98,3 +98,57 @@ func TestParseResourceID_CompatibilityFormats(t *testing.T) {
 		}
 	}
 }
+
+func TestCreateMemo_AttachmentResolutionFailureIsAtomic(t *testing.T) {
+	services := setupTestServices(t)
+	ctx := context.Background()
+	user := mustCreateUser(t, services.store, "memo-attach-atomic")
+
+	_, err := services.memoService.CreateMemo(ctx, user.ID, CreateMemoInput{
+		Content:         "content",
+		Visibility:      models.VisibilityPrivate,
+		AttachmentNames: []string{"attachments/999999"},
+	})
+	if err == nil {
+		t.Fatalf("expected CreateMemo() error for non-existing attachment")
+	}
+
+	memos, err := services.store.ListAllMemos(ctx)
+	if err != nil {
+		t.Fatalf("ListAllMemos() error = %v", err)
+	}
+	if len(memos) != 0 {
+		t.Fatalf("expected no memo persisted on attachment resolution failure, got %d", len(memos))
+	}
+}
+
+func TestUpdateMemo_AttachmentResolutionFailureIsAtomic(t *testing.T) {
+	services := setupTestServices(t)
+	ctx := context.Background()
+	user := mustCreateUser(t, services.store, "memo-update-attach-atomic")
+
+	created, err := services.memoService.CreateMemo(ctx, user.ID, CreateMemoInput{
+		Content:    "before",
+		Visibility: models.VisibilityPrivate,
+	})
+	if err != nil {
+		t.Fatalf("CreateMemo() error = %v", err)
+	}
+
+	newContent := "after"
+	_, err = services.memoService.UpdateMemo(ctx, user.ID, created.Memo.ID, UpdateMemoInput{
+		Content:         &newContent,
+		AttachmentNames: &[]string{"attachments/999999"},
+	})
+	if err == nil {
+		t.Fatalf("expected UpdateMemo() error for non-existing attachment")
+	}
+
+	got, err := services.store.GetMemoByID(ctx, created.Memo.ID)
+	if err != nil {
+		t.Fatalf("GetMemoByID() error = %v", err)
+	}
+	if got.Content != "before" {
+		t.Fatalf("expected memo content unchanged after failed update, got %q", got.Content)
+	}
+}

@@ -422,6 +422,53 @@ func (s *SQLStore) CreateMemo(ctx context.Context, creatorID int64, content stri
 	return s.GetMemoByID(ctx, id)
 }
 
+func (s *SQLStore) CreateMemoWithAttachments(ctx context.Context, creatorID int64, content string, visibility models.Visibility, state models.MemoState, pinned bool, payload models.MemoPayload, displayTime time.Time, attachmentIDs []int64) (models.Memo, error) {
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return models.Memo{}, err
+	}
+	now := time.Now().UTC()
+	pinnedInt := 0
+	if pinned {
+		pinnedInt = 1
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return models.Memo{}, err
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	res, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO memos (creator_id, content, visibility, state, pinned, create_time, update_time, display_time, payload_json)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		creatorID,
+		content,
+		visibility,
+		state,
+		pinnedInt,
+		now.Format(time.RFC3339Nano),
+		now.Format(time.RFC3339Nano),
+		displayTime.UTC().Format(time.RFC3339Nano),
+		string(payloadJSON),
+	)
+	if err != nil {
+		return models.Memo{}, err
+	}
+	memoID, err := res.LastInsertId()
+	if err != nil {
+		return models.Memo{}, err
+	}
+	if err := setMemoAttachmentsInTx(ctx, tx, memoID, attachmentIDs); err != nil {
+		return models.Memo{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return models.Memo{}, err
+	}
+	return s.GetMemoByID(ctx, memoID)
+}
+
 func (s *SQLStore) GetMemoByID(ctx context.Context, id int64) (models.Memo, error) {
 	row := s.db.QueryRowContext(
 		ctx,
@@ -476,6 +523,70 @@ func (s *SQLStore) UpdateMemo(ctx context.Context, memoID int64, update MemoUpda
 
 	query := fmt.Sprintf(`UPDATE memos SET %s WHERE id = ?`, strings.Join(assignments, ", "))
 	if _, err := s.db.ExecContext(ctx, query, args...); err != nil {
+		return models.Memo{}, err
+	}
+	return s.GetMemoByID(ctx, memoID)
+}
+
+func (s *SQLStore) UpdateMemoWithAttachments(ctx context.Context, memoID int64, update MemoUpdate, attachmentIDs *[]int64) (models.Memo, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return models.Memo{}, err
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	assignments := make([]string, 0, 8)
+	args := make([]any, 0, 8)
+
+	if update.Content != nil {
+		assignments = append(assignments, "content = ?")
+		args = append(args, *update.Content)
+	}
+	if update.Visibility != nil {
+		assignments = append(assignments, "visibility = ?")
+		args = append(args, *update.Visibility)
+	}
+	if update.State != nil {
+		assignments = append(assignments, "state = ?")
+		args = append(args, *update.State)
+	}
+	if update.Pinned != nil {
+		pinnedInt := 0
+		if *update.Pinned {
+			pinnedInt = 1
+		}
+		assignments = append(assignments, "pinned = ?")
+		args = append(args, pinnedInt)
+	}
+	if update.DisplayTime != nil {
+		assignments = append(assignments, "display_time = ?")
+		args = append(args, update.DisplayTime.UTC().Format(time.RFC3339Nano))
+	}
+	if update.Payload != nil {
+		payloadJSON, err := json.Marshal(*update.Payload)
+		if err != nil {
+			return models.Memo{}, err
+		}
+		assignments = append(assignments, "payload_json = ?")
+		args = append(args, string(payloadJSON))
+	}
+
+	assignments = append(assignments, "update_time = ?")
+	args = append(args, time.Now().UTC().Format(time.RFC3339Nano))
+	args = append(args, memoID)
+
+	query := fmt.Sprintf(`UPDATE memos SET %s WHERE id = ?`, strings.Join(assignments, ", "))
+	if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+		return models.Memo{}, err
+	}
+
+	if attachmentIDs != nil {
+		if err := setMemoAttachmentsInTx(ctx, tx, memoID, *attachmentIDs); err != nil {
+			return models.Memo{}, err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
 		return models.Memo{}, err
 	}
 	return s.GetMemoByID(ctx, memoID)
@@ -861,6 +972,13 @@ func (s *SQLStore) SetMemoAttachments(ctx context.Context, memoID int64, attachm
 	}
 	defer tx.Rollback() //nolint:errcheck
 
+	if err := setMemoAttachmentsInTx(ctx, tx, memoID, attachmentIDs); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func setMemoAttachmentsInTx(ctx context.Context, tx *sql.Tx, memoID int64, attachmentIDs []int64) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM memo_attachments WHERE memo_id = ?`, memoID); err != nil {
 		return err
 	}
@@ -875,7 +993,7 @@ func (s *SQLStore) SetMemoAttachments(ctx context.Context, memoID int64, attachm
 			return err
 		}
 	}
-	return tx.Commit()
+	return nil
 }
 
 func (s *SQLStore) ListAttachmentsByMemoIDs(ctx context.Context, memoIDs []int64) (map[int64][]models.Attachment, error) {
