@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"encoding/base64"
 	"fmt"
@@ -9,7 +10,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/shinyes/keer/internal/models"
 	"github.com/shinyes/keer/internal/storage"
@@ -65,7 +65,10 @@ func (s *AttachmentService) CreateAttachment(ctx context.Context, userID int64, 
 		memoID = &id
 	}
 
-	storageKey := fmt.Sprintf("attachments/%d/%d/%s", userID, time.Now().UTC().UnixNano(), filename)
+	storageKey, err := buildAttachmentStorageKey(userID, filename)
+	if err != nil {
+		return models.Attachment{}, err
+	}
 	size, err := s.storage.Put(ctx, storageKey, contentType, data)
 	if err != nil {
 		return models.Attachment{}, err
@@ -161,6 +164,30 @@ func sanitizeFilename(filename string) string {
 		return ""
 	}
 	return filename
+}
+
+func buildAttachmentStorageKey(userID int64, filename string) (string, error) {
+	nanoid, err := generateShortNanoID(5)
+	if err != nil {
+		return "", fmt.Errorf("generate attachment id: %w", err)
+	}
+	return fmt.Sprintf("attachments/%d/%s_%s", userID, nanoid, filename), nil
+}
+
+func generateShortNanoID(length int) (string, error) {
+	if length <= 0 {
+		return "", fmt.Errorf("invalid nanoid length")
+	}
+	const alphabet = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-_"
+	buf := make([]byte, length)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	out := make([]byte, length)
+	for i, b := range buf {
+		out[i] = alphabet[b&63]
+	}
+	return string(out), nil
 }
 
 func storageTypeName(s storage.Store) string {
