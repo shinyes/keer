@@ -241,6 +241,101 @@ Content-Type: application/json
 go run ./cmd/server admin memo rebuild-payload
 ```
 
+## 运维命令（后台管理）
+
+后端二进制支持 `admin` 子命令，可在不改代码的情况下做常见运维：
+
+### 1) 后台创建用户
+
+```powershell
+go run ./cmd/server admin user create <username> <password> [display_name] [role]
+```
+
+示例：
+
+```powershell
+go run ./cmd/server admin user create alice alice-password Alice USER
+```
+
+说明：
+
+- `role` 可选，默认 `USER`
+- 命令创建用户时使用管理员权限语义，可创建普通用户或管理员用户
+- 依然会校验用户名与密码（密码禁止为空）
+
+### 2) 为用户生成 Access Token
+
+```powershell
+go run ./cmd/server admin token create <username_or_id> [description] [--ttl 7d|24h] [--expires-at 2026-12-31T23:59:59Z]
+```
+
+示例：
+
+```powershell
+go run ./cmd/server admin token create alice "mobile token"
+go run ./cmd/server admin token create 1
+go run ./cmd/server admin token create alice --ttl 30d
+go run ./cmd/server admin token create alice --ttl 720h
+go run ./cmd/server admin token create alice --expires-at 2026-12-31T23:59:59Z
+```
+
+说明：
+
+- 可选 `--ttl`：相对当前时间的有效期（支持 `d/day/days` 与 Go duration，如 `7d`、`30d`、`24h`、`30m`）
+- 可选 `--expires-at`：绝对过期时间（RFC3339 格式）
+- `--ttl` 与 `--expires-at` 不能同时使用
+- 过期时间必须晚于当前时间
+- 不传过期参数时，token 默认不过期
+
+命令会输出可直接使用的 `accessToken`；若设置了过期时间，也会输出 `expiresAt`。
+
+### 2.1) 查看用户的 Access Token 列表
+
+```powershell
+go run ./cmd/server admin token list <username_or_id>
+```
+
+示例：
+
+```powershell
+go run ./cmd/server admin token list alice
+```
+
+说明：
+
+- 会输出 token 元信息：`id`、`token_prefix`、创建时间、过期时间、撤销时间、最后使用时间、描述
+- 出于安全原因，不会输出完整 token 明文
+
+### 2.2) 撤销 Access Token
+
+```powershell
+go run ./cmd/server admin token revoke <token_id>
+```
+
+示例：
+
+```powershell
+go run ./cmd/server admin token revoke 12
+```
+
+说明：
+
+- 撤销后该 token 立即失效
+- 再次撤销同一个 token 会提示“已撤销”
+
+### 3) 动态允许/禁止注册
+
+```powershell
+go run ./cmd/server admin registration status
+go run ./cmd/server admin registration enable
+go run ./cmd/server admin registration disable
+```
+
+说明：
+
+- 该开关持久化在数据库中，修改后立即影响 `POST /api/v1/users` 行为
+- 若数据库中没有该设置，则回退到环境变量 `ALLOW_REGISTRATION`
+
 ## 测试
 
 ```powershell

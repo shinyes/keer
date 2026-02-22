@@ -68,6 +68,11 @@ func Migrate(db *sql.DB) error {
 			FOREIGN KEY(attachment_id) REFERENCES attachments(id) ON DELETE CASCADE
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_memo_attachments_memo ON memo_attachments(memo_id, position);`,
+		`CREATE TABLE IF NOT EXISTS system_settings (
+			key TEXT PRIMARY KEY,
+			value TEXT NOT NULL,
+			update_time TEXT NOT NULL
+		);`,
 	}
 
 	for _, stmt := range stmts {

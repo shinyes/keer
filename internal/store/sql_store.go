@@ -135,21 +135,30 @@ func (s *SQLStore) GetUserByUsername(ctx context.Context, username string) (mode
 }
 
 func (s *SQLStore) CreatePersonalAccessToken(ctx context.Context, userID int64, rawToken string, description string) (models.PersonalAccessToken, error) {
+	return s.CreatePersonalAccessTokenWithExpiry(ctx, userID, rawToken, description, nil)
+}
+
+func (s *SQLStore) CreatePersonalAccessTokenWithExpiry(ctx context.Context, userID int64, rawToken string, description string, expiresAt *time.Time) (models.PersonalAccessToken, error) {
 	now := time.Now().UTC()
 	tokenHash := HashToken(rawToken)
 	tokenPrefix := rawToken
 	if len(tokenPrefix) > 8 {
 		tokenPrefix = tokenPrefix[:8]
 	}
+	var expiresValue any
+	if expiresAt != nil {
+		expiresValue = expiresAt.UTC().Format(time.RFC3339Nano)
+	}
 	res, err := s.db.ExecContext(
 		ctx,
-		`INSERT INTO personal_access_tokens (user_id, token_prefix, token_hash, description, created_at)
-		VALUES (?, ?, ?, ?, ?)`,
+		`INSERT INTO personal_access_tokens (user_id, token_prefix, token_hash, description, created_at, expires_at)
+		VALUES (?, ?, ?, ?, ?, ?)`,
 		userID,
 		tokenPrefix,
 		tokenHash,
 		description,
 		now.Format(time.RFC3339Nano),
+		expiresValue,
 	)
 	if err != nil {
 		return models.PersonalAccessToken{}, err
@@ -204,6 +213,84 @@ func (s *SQLStore) GetPersonalAccessTokenByID(ctx context.Context, id int64) (mo
 		return models.PersonalAccessToken{}, errParse
 	}
 	return token, nil
+}
+
+func (s *SQLStore) ListPersonalAccessTokensByUserID(ctx context.Context, userID int64) ([]models.PersonalAccessToken, error) {
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT id, user_id, token_prefix, token_hash, description, created_at, last_used_at, expires_at, revoked_at
+		FROM personal_access_tokens
+		WHERE user_id = ?
+		ORDER BY created_at DESC, id DESC`,
+		userID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make([]models.PersonalAccessToken, 0)
+	for rows.Next() {
+		var token models.PersonalAccessToken
+		var createdAt string
+		var lastUsedAt sql.NullString
+		var expiresAt sql.NullString
+		var revokedAt sql.NullString
+		if err := rows.Scan(
+			&token.ID,
+			&token.UserID,
+			&token.TokenPrefix,
+			&token.TokenHash,
+			&token.Description,
+			&createdAt,
+			&lastUsedAt,
+			&expiresAt,
+			&revokedAt,
+		); err != nil {
+			return nil, err
+		}
+		var parseErr error
+		token.CreatedAt, parseErr = parseTime(createdAt)
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		token.LastUsedAt, parseErr = parseNullableTime(lastUsedAt)
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		token.ExpiresAt, parseErr = parseNullableTime(expiresAt)
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		token.RevokedAt, parseErr = parseNullableTime(revokedAt)
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		result = append(result, token)
+	}
+	return result, rows.Err()
+}
+
+func (s *SQLStore) RevokePersonalAccessToken(ctx context.Context, tokenID int64) error {
+	res, err := s.db.ExecContext(
+		ctx,
+		`UPDATE personal_access_tokens
+		SET revoked_at = ?
+		WHERE id = ? AND revoked_at IS NULL`,
+		time.Now().UTC().Format(time.RFC3339Nano),
+		tokenID,
+	)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 func (s *SQLStore) GetUserByToken(ctx context.Context, rawToken string) (models.User, models.PersonalAccessToken, error) {

@@ -211,7 +211,78 @@ func TestGetUserStatsByUsernameEndpoint(t *testing.T) {
 	}
 }
 
+func TestCreateUserEndpoint_RegistrationSettingOverridesEnv(t *testing.T) {
+	app, userService := newTestAppWithUserService(t, true, false)
+
+	firstBody := map[string]any{
+		"user": map[string]any{
+			"username": "owner01",
+			"password": "register-password",
+		},
+	}
+	firstPayload, _ := json.Marshal(firstBody)
+	firstReq := httptest.NewRequest(http.MethodPost, "/api/v1/users", bytes.NewReader(firstPayload))
+	firstReq.Header.Set("Content-Type", "application/json")
+	firstResp, err := app.Test(firstReq)
+	if err != nil {
+		t.Fatalf("create first user request failed: %v", err)
+	}
+	defer firstResp.Body.Close()
+	if firstResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected first create user 200, got %d", firstResp.StatusCode)
+	}
+
+	if err := userService.SetAllowRegistration(context.Background(), false); err != nil {
+		t.Fatalf("SetAllowRegistration(false) error = %v", err)
+	}
+
+	blockedBody := map[string]any{
+		"user": map[string]any{
+			"username": "blocked02",
+			"password": "register-password",
+		},
+	}
+	blockedPayload, _ := json.Marshal(blockedBody)
+	blockedReq := httptest.NewRequest(http.MethodPost, "/api/v1/users", bytes.NewReader(blockedPayload))
+	blockedReq.Header.Set("Content-Type", "application/json")
+	blockedResp, err := app.Test(blockedReq)
+	if err != nil {
+		t.Fatalf("create blocked user request failed: %v", err)
+	}
+	defer blockedResp.Body.Close()
+	if blockedResp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected blocked create user 403, got %d", blockedResp.StatusCode)
+	}
+
+	if err := userService.SetAllowRegistration(context.Background(), true); err != nil {
+		t.Fatalf("SetAllowRegistration(true) error = %v", err)
+	}
+
+	allowedBody := map[string]any{
+		"user": map[string]any{
+			"username": "allowed03",
+			"password": "register-password",
+		},
+	}
+	allowedPayload, _ := json.Marshal(allowedBody)
+	allowedReq := httptest.NewRequest(http.MethodPost, "/api/v1/users", bytes.NewReader(allowedPayload))
+	allowedReq.Header.Set("Content-Type", "application/json")
+	allowedResp, err := app.Test(allowedReq)
+	if err != nil {
+		t.Fatalf("create allowed user request failed: %v", err)
+	}
+	defer allowedResp.Body.Close()
+	if allowedResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected allowed create user 200, got %d", allowedResp.StatusCode)
+	}
+}
+
 func newTestApp(t *testing.T, allowRegistration bool, withBootstrap bool) *fiber.App {
+	app, _ := newTestAppWithUserService(t, allowRegistration, withBootstrap)
+	return app
+}
+
+func newTestAppWithUserService(t *testing.T, allowRegistration bool, withBootstrap bool) (*fiber.App, *service.UserService) {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "http_test.db")
 	sqliteDB, err := db.OpenSQLite(dbPath)
@@ -244,5 +315,5 @@ func newTestApp(t *testing.T, allowRegistration bool, withBootstrap bool) *fiber
 		Version:           "0.26.1",
 		AllowRegistration: allowRegistration,
 	}
-	return NewRouter(cfg, userService, memoService, attachmentService)
+	return NewRouter(cfg, userService, memoService, attachmentService), userService
 }

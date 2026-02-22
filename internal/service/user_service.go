@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 
@@ -29,9 +30,13 @@ var (
 	ErrInvalidRole           = errors.New("invalid role")
 	ErrUsernameAlreadyExists = errors.New("username already exists")
 	ErrTokenAlreadyExists    = errors.New("access token already exists")
+	ErrTokenAlreadyRevoked   = errors.New("access token already revoked")
+	ErrInvalidTokenExpiry    = errors.New("invalid token expiry")
 	ErrRegistrationDisabled  = errors.New("registration is disabled")
 	usernamePattern          = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{2,31}$`)
 )
+
+const settingKeyAllowRegistration = "allow_registration"
 
 type CreateUserInput struct {
 	Username     string
@@ -172,6 +177,81 @@ func (s *UserService) CreateUser(ctx context.Context, creator *models.User, inpu
 	return user, nil
 }
 
+func (s *UserService) ResolveAllowRegistration(ctx context.Context, fallback bool) (bool, error) {
+	raw, err := s.store.GetSetting(ctx, settingKeyAllowRegistration)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fallback, nil
+		}
+		return fallback, err
+	}
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "true", "1", "yes", "on":
+		return true, nil
+	case "false", "0", "no", "off":
+		return false, nil
+	default:
+		return fallback, nil
+	}
+}
+
+func (s *UserService) SetAllowRegistration(ctx context.Context, allow bool) error {
+	value := "false"
+	if allow {
+		value = "true"
+	}
+	return s.store.UpsertSetting(ctx, settingKeyAllowRegistration, value)
+}
+
+func (s *UserService) CreateAccessTokenForUser(ctx context.Context, identifier string, description string) (models.User, string, error) {
+	return s.CreateAccessTokenForUserWithExpiry(ctx, identifier, description, nil)
+}
+
+func (s *UserService) CreateAccessTokenForUserWithExpiry(ctx context.Context, identifier string, description string, expiresAt *time.Time) (models.User, string, error) {
+	user, err := s.GetUserByIdentifier(ctx, identifier)
+	if err != nil {
+		return models.User{}, "", err
+	}
+	description = strings.TrimSpace(description)
+	if description == "" {
+		description = "admin generated token"
+	}
+	token, err := s.createAccessToken(ctx, user.ID, description, expiresAt)
+	if err != nil {
+		return models.User{}, "", err
+	}
+	return user, token, nil
+}
+
+func (s *UserService) ListAccessTokensForUser(ctx context.Context, identifier string) (models.User, []models.PersonalAccessToken, error) {
+	user, err := s.GetUserByIdentifier(ctx, identifier)
+	if err != nil {
+		return models.User{}, nil, err
+	}
+	tokens, err := s.store.ListPersonalAccessTokensByUserID(ctx, user.ID)
+	if err != nil {
+		return models.User{}, nil, err
+	}
+	return user, tokens, nil
+}
+
+func (s *UserService) RevokeAccessTokenByID(ctx context.Context, tokenID int64) (models.PersonalAccessToken, error) {
+	token, err := s.store.GetPersonalAccessTokenByID(ctx, tokenID)
+	if err != nil {
+		return models.PersonalAccessToken{}, err
+	}
+	if token.RevokedAt != nil {
+		return token, ErrTokenAlreadyRevoked
+	}
+	if err := s.store.RevokePersonalAccessToken(ctx, tokenID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return token, ErrTokenAlreadyRevoked
+		}
+		return models.PersonalAccessToken{}, err
+	}
+	return s.store.GetPersonalAccessTokenByID(ctx, tokenID)
+}
+
 func (s *UserService) SignInWithPassword(ctx context.Context, username string, password string) (models.User, string, error) {
 	username = strings.TrimSpace(username)
 	if username == "" || password == "" {
@@ -192,7 +272,7 @@ func (s *UserService) SignInWithPassword(ctx context.Context, username string, p
 		return models.User{}, "", ErrInvalidCredentials
 	}
 
-	token, err := s.createAccessToken(ctx, user.ID, "signin token")
+	token, err := s.createAccessToken(ctx, user.ID, "signin token", nil)
 	if err != nil {
 		return models.User{}, "", err
 	}
@@ -207,13 +287,22 @@ func isUniqueConstraintErr(err error) bool {
 	return strings.Contains(msg, "unique constraint failed") || strings.Contains(msg, "constraint failed")
 }
 
-func (s *UserService) createAccessToken(ctx context.Context, userID int64, description string) (string, error) {
+func (s *UserService) createAccessToken(ctx context.Context, userID int64, description string, expiresAt *time.Time) (string, error) {
+	var normalizedExpiresAt *time.Time
+	if expiresAt != nil {
+		expires := expiresAt.UTC()
+		if !expires.After(time.Now().UTC()) {
+			return "", ErrInvalidTokenExpiry
+		}
+		normalizedExpiresAt = &expires
+	}
+
 	for i := 0; i < 5; i++ {
 		token, err := generateAccessToken()
 		if err != nil {
 			return "", err
 		}
-		if _, err := s.store.CreatePersonalAccessToken(ctx, userID, token, description); err == nil {
+		if _, err := s.store.CreatePersonalAccessTokenWithExpiry(ctx, userID, token, description, normalizedExpiresAt); err == nil {
 			return token, nil
 		} else if !isUniqueConstraintErr(err) {
 			return "", err
