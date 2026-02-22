@@ -19,6 +19,7 @@ func TestCreateMemo_AllowsEmptyContentWithAttachments(t *testing.T) {
 		"",
 		"image/png",
 		1024,
+		"memo-compat-test-hash",
 		"LOCAL",
 		"attachments/test/image.png",
 	)

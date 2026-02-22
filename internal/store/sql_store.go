@@ -667,29 +667,98 @@ func (s *SQLStore) UpdateMemoPayload(ctx context.Context, memoID int64, payload 
 	return err
 }
 
-func (s *SQLStore) CreateAttachment(ctx context.Context, creatorID int64, filename string, externalLink string, fileType string, size int64, storageType string, storageKey string) (models.Attachment, error) {
+func (s *SQLStore) CreateAttachment(ctx context.Context, creatorID int64, filename string, externalLink string, fileType string, size int64, contentHash string, storageType string, storageKey string) (models.Attachment, error) {
+	attachment, _, err := s.CreateAttachmentIfAbsent(ctx, creatorID, filename, externalLink, fileType, size, contentHash, storageType, storageKey)
+	return attachment, err
+}
+
+func (s *SQLStore) CreateAttachmentIfAbsent(ctx context.Context, creatorID int64, filename string, externalLink string, fileType string, size int64, contentHash string, storageType string, storageKey string) (models.Attachment, bool, error) {
+	existing, found, err := s.FindAttachmentByContentHash(ctx, creatorID, contentHash)
+	if err != nil {
+		return models.Attachment{}, false, err
+	}
+	if found {
+		return existing, false, nil
+	}
+
 	now := time.Now().UTC()
 	res, err := s.db.ExecContext(
 		ctx,
-		`INSERT INTO attachments (creator_id, filename, external_link, type, size, storage_type, storage_key, create_time)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO attachments (creator_id, filename, external_link, type, size, content_hash, storage_type, storage_key, create_time)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(creator_id, content_hash) DO NOTHING`,
 		creatorID,
 		filename,
 		externalLink,
 		fileType,
 		size,
+		contentHash,
 		storageType,
 		storageKey,
 		now.Format(time.RFC3339Nano),
 	)
 	if err != nil {
-		return models.Attachment{}, err
+		return models.Attachment{}, false, err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return models.Attachment{}, false, err
+	}
+	if affected == 0 {
+		existing, found, findErr := s.FindAttachmentByContentHash(ctx, creatorID, contentHash)
+		if findErr != nil {
+			return models.Attachment{}, false, findErr
+		}
+		if found {
+			return existing, false, nil
+		}
+		return models.Attachment{}, false, sql.ErrNoRows
 	}
 	id, err := res.LastInsertId()
 	if err != nil {
-		return models.Attachment{}, err
+		return models.Attachment{}, false, err
 	}
-	return s.GetAttachmentByID(ctx, id)
+	attachment, err := s.GetAttachmentByID(ctx, id)
+	if err != nil {
+		return models.Attachment{}, false, err
+	}
+	return attachment, true, nil
+}
+
+func (s *SQLStore) FindAttachmentByContentHash(ctx context.Context, creatorID int64, contentHash string) (models.Attachment, bool, error) {
+	var attachment models.Attachment
+	var createTime string
+	err := s.db.QueryRowContext(
+		ctx,
+		`SELECT id, creator_id, filename, external_link, type, size, storage_type, storage_key, create_time
+		FROM attachments
+		WHERE creator_id = ? AND content_hash = ?
+		ORDER BY id DESC
+		LIMIT 1`,
+		creatorID,
+		contentHash,
+	).Scan(
+		&attachment.ID,
+		&attachment.CreatorID,
+		&attachment.Filename,
+		&attachment.ExternalLink,
+		&attachment.Type,
+		&attachment.Size,
+		&attachment.StorageType,
+		&attachment.StorageKey,
+		&createTime,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return models.Attachment{}, false, nil
+		}
+		return models.Attachment{}, false, err
+	}
+	attachment.CreateTime, err = parseTime(createTime)
+	if err != nil {
+		return models.Attachment{}, false, err
+	}
+	return attachment, true, nil
 }
 
 func (s *SQLStore) ListAttachmentCandidates(ctx context.Context, creatorID int64, filename string, fileType string, size int64, limit int) ([]models.Attachment, error) {

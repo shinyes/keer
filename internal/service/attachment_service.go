@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
@@ -55,7 +54,6 @@ func (s *AttachmentService) CreateAttachment(ctx context.Context, userID int64, 
 		return models.Attachment{}, fmt.Errorf("invalid base64 content")
 	}
 	contentHash := hashAttachmentContent(data)
-	contentSize := int64(len(data))
 
 	var memoID *int64
 	if input.MemoName != nil {
@@ -69,7 +67,7 @@ func (s *AttachmentService) CreateAttachment(ctx context.Context, userID int64, 
 		memoID = &id
 	}
 
-	existing, found, err := s.findExistingAttachmentByContent(ctx, userID, filename, contentType, contentSize, contentHash)
+	existing, found, err := s.store.FindAttachmentByContentHash(ctx, userID, contentHash)
 	if err != nil {
 		return models.Attachment{}, err
 	}
@@ -82,7 +80,7 @@ func (s *AttachmentService) CreateAttachment(ctx context.Context, userID int64, 
 		return existing, nil
 	}
 
-	storageKey, err := buildAttachmentStorageKey(userID, filename)
+	storageKey, err := buildAttachmentStorageKey(userID, filename, contentHash)
 	if err != nil {
 		return models.Attachment{}, err
 	}
@@ -91,18 +89,18 @@ func (s *AttachmentService) CreateAttachment(ctx context.Context, userID int64, 
 		return models.Attachment{}, err
 	}
 
-	attachment, err := s.store.CreateAttachment(
+	attachment, _, err := s.store.CreateAttachmentIfAbsent(
 		ctx,
 		userID,
 		filename,
 		"",
 		contentType,
 		size,
+		contentHash,
 		storageTypeName(s.storage),
 		storageKey,
 	)
 	if err != nil {
-		_ = s.storage.Delete(ctx, storageKey)
 		return models.Attachment{}, err
 	}
 
@@ -179,36 +177,6 @@ func hashAttachmentContent(data []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func hashAttachmentReader(r io.Reader) (string, error) {
-	h := sha256.New()
-	if _, err := io.Copy(h, r); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
-}
-
-func (s *AttachmentService) findExistingAttachmentByContent(ctx context.Context, userID int64, filename string, contentType string, contentSize int64, wantHash string) (models.Attachment, bool, error) {
-	candidates, err := s.store.ListAttachmentCandidates(ctx, userID, filename, contentType, contentSize, 20)
-	if err != nil {
-		return models.Attachment{}, false, err
-	}
-	for _, candidate := range candidates {
-		rc, openErr := s.storage.Open(ctx, candidate.StorageKey)
-		if openErr != nil {
-			continue
-		}
-		gotHash, hashErr := hashAttachmentReader(rc)
-		closeErr := rc.Close()
-		if hashErr != nil || closeErr != nil {
-			continue
-		}
-		if gotHash == wantHash {
-			return candidate, true, nil
-		}
-	}
-	return models.Attachment{}, false, nil
-}
-
 func (s *AttachmentService) attachToMemo(ctx context.Context, memoID int64, attachmentID int64) error {
 	attachedMap, err := s.store.ListAttachmentsByMemoIDs(ctx, []int64{memoID})
 	if err != nil {
@@ -229,28 +197,17 @@ func (s *AttachmentService) attachToMemo(ctx context.Context, memoID int64, atta
 	return s.store.SetMemoAttachments(ctx, memoID, attachmentIDs)
 }
 
-func buildAttachmentStorageKey(userID int64, filename string) (string, error) {
-	nanoid, err := generateShortNanoID(5)
-	if err != nil {
-		return "", fmt.Errorf("generate attachment id: %w", err)
+func buildAttachmentStorageKey(userID int64, filename string, contentHash string) (string, error) {
+	hash := strings.TrimSpace(strings.ToLower(contentHash))
+	if len(hash) != 64 {
+		return "", fmt.Errorf("invalid content hash")
 	}
-	return fmt.Sprintf("attachments/%d/%s_%s", userID, nanoid, filename), nil
-}
-
-func generateShortNanoID(length int) (string, error) {
-	if length <= 0 {
-		return "", fmt.Errorf("invalid nanoid length")
+	for _, ch := range hash {
+		if (ch < '0' || ch > '9') && (ch < 'a' || ch > 'f') {
+			return "", fmt.Errorf("invalid content hash")
+		}
 	}
-	const alphabet = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-_"
-	buf := make([]byte, length)
-	if _, err := rand.Read(buf); err != nil {
-		return "", err
-	}
-	out := make([]byte, length)
-	for i, b := range buf {
-		out[i] = alphabet[b&63]
-	}
-	return string(out), nil
+	return fmt.Sprintf("attachments/%d/%s/%s_%s", userID, hash[:2], hash, filename), nil
 }
 
 func storageTypeName(s storage.Store) string {

@@ -42,46 +42,32 @@ func TestParseMemoID_CompatibilityFormats(t *testing.T) {
 }
 
 func TestBuildAttachmentStorageKey_Format(t *testing.T) {
-	key, err := buildAttachmentStorageKey(1, "16848.jpg")
+	const hash = "9eeb410cd359fd0d435f6914adf86000f5b8ffac9d5ec100ba9f70f5cd5cb788"
+	key, err := buildAttachmentStorageKey(1, "16848.jpg", hash)
 	if err != nil {
 		t.Fatalf("buildAttachmentStorageKey() error = %v", err)
 	}
 
-	if !strings.HasPrefix(key, "attachments/1/") {
+	if !strings.HasPrefix(key, "attachments/1/9e/") {
 		t.Fatalf("unexpected key prefix: %s", key)
 	}
 	parts := strings.Split(key, "/")
-	if len(parts) != 3 {
+	if len(parts) != 4 {
 		t.Fatalf("unexpected key format: %s", key)
 	}
 
-	filePart := parts[2]
-	if !strings.HasSuffix(filePart, "_16848.jpg") {
+	filePart := parts[3]
+	if filePart != hash+"_16848.jpg" {
 		t.Fatalf("unexpected file part: %s", filePart)
-	}
-	nanoid := strings.TrimSuffix(filePart, "_16848.jpg")
-	if len(nanoid) != 5 {
-		t.Fatalf("unexpected nanoid length: got %d, key=%s", len(nanoid), key)
-	}
-	for _, ch := range nanoid {
-		if !(ch >= '0' && ch <= '9') &&
-			!(ch >= 'a' && ch <= 'z') &&
-			!(ch >= 'A' && ch <= 'Z') &&
-			ch != '-' &&
-			ch != '_' {
-			t.Fatalf("unexpected nanoid char %q in key=%s", ch, key)
-		}
 	}
 }
 
-func TestGenerateShortNanoID_Length(t *testing.T) {
-	id, err := generateShortNanoID(5)
+func TestBuildAttachmentStorageKey_InvalidHash(t *testing.T) {
+	_, err := buildAttachmentStorageKey(1, "16848.jpg", "bad-hash")
 	if err != nil {
-		t.Fatalf("generateShortNanoID() error = %v", err)
+		return
 	}
-	if len(id) != 5 {
-		t.Fatalf("nanoid length got %d, want 5", len(id))
-	}
+	t.Fatal("expected invalid content hash error")
 }
 
 func TestCreateAttachment_DeduplicateSameContent(t *testing.T) {
@@ -123,7 +109,7 @@ func TestCreateAttachment_DeduplicateSameContent(t *testing.T) {
 	}
 }
 
-func TestCreateAttachment_NoDedupForDifferentFilename(t *testing.T) {
+func TestCreateAttachment_DedupForDifferentFilename(t *testing.T) {
 	services := setupTestServices(t)
 	localStore, err := storage.NewLocalStore(filepath.Join(t.TempDir(), "uploads"))
 	if err != nil {
@@ -150,7 +136,14 @@ func TestCreateAttachment_NoDedupForDifferentFilename(t *testing.T) {
 		t.Fatalf("second CreateAttachment() error = %v", err)
 	}
 
-	if first.ID == second.ID {
-		t.Fatalf("expected different attachment id for different filename")
+	if first.ID != second.ID {
+		t.Fatalf("expected deduplicated attachment id for same content, got first=%d second=%d", first.ID, second.ID)
+	}
+	list, err := services.store.ListAttachmentsByCreator(context.Background(), user.ID)
+	if err != nil {
+		t.Fatalf("ListAttachmentsByCreator() error = %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("expected single stored attachment, got %d", len(list))
 	}
 }

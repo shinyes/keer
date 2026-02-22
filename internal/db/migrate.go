@@ -52,12 +52,14 @@ func Migrate(db *sql.DB) error {
 			external_link TEXT NOT NULL DEFAULT '',
 			type TEXT NOT NULL,
 			size INTEGER NOT NULL,
+			content_hash TEXT NOT NULL,
 			storage_type TEXT NOT NULL,
 			storage_key TEXT NOT NULL,
 			create_time TEXT NOT NULL,
 			FOREIGN KEY(creator_id) REFERENCES users(id) ON DELETE CASCADE
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_attachments_creator ON attachments(creator_id);`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_attachments_creator_hash ON attachments(creator_id, content_hash);`,
 		`CREATE TABLE IF NOT EXISTS memo_attachments (
 			memo_id INTEGER NOT NULL,
 			attachment_id INTEGER NOT NULL,
