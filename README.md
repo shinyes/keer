@@ -291,7 +291,7 @@ user create alice alice-password Alice USER
 ### 2) 为用户生成 Access Token
 
 ```text
-token create <username_or_id> [description] [--ttl 7d|24h] [--expires-at 2026-12-31T23:59:59Z]
+token create <username_or_id> [description] [--ttl 7d|24h]
 ```
 
 示例：
@@ -301,16 +301,13 @@ token create alice "mobile token"
 token create 1
 token create alice --ttl 30d
 token create alice --ttl 720h
-token create alice --expires-at 2026-12-31T23:59:59Z
 ```
 
 说明：
 
 - 可选 `--ttl`：相对当前时间的有效期（支持 `d/day/days` 与 Go duration，如 `7d`、`30d`、`24h`、`30m`）
-- 可选 `--expires-at`：绝对过期时间（RFC3339 格式）
-- `--ttl` 与 `--expires-at` 不能同时使用
 - 过期时间必须晚于当前时间
-- 不传过期参数时，token 默认不过期
+- 不传过期参数时，默认按 `--ttl 7d` 生成过期时间
 
 命令会输出可直接使用的 `accessToken`；若设置了过期时间，也会输出 `expiresAt`。
 

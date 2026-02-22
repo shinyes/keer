@@ -286,3 +286,54 @@ func TestParseTokenListArgs(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveTokenExpiresAt(t *testing.T) {
+	now := time.Date(2026, 2, 22, 16, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name    string
+		ttlRaw  string
+		want    *time.Time
+		wantErr bool
+	}{
+		{
+			name:    "default ttl 7d",
+			want:    ptrTime(now.Add(7 * 24 * time.Hour)),
+			wantErr: false,
+		},
+		{
+			name:    "explicit ttl",
+			ttlRaw:  "24h",
+			want:    ptrTime(now.Add(24 * time.Hour)),
+			wantErr: false,
+		},
+		{
+			name:    "invalid ttl",
+			ttlRaw:  "bad",
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range tests {
+		got, err := resolveTokenExpiresAt(tc.ttlRaw, now)
+		if tc.wantErr {
+			if err == nil {
+				t.Fatalf("%s: expected error, got nil", tc.name)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("%s: unexpected error: %v", tc.name, err)
+		}
+		if got == nil {
+			t.Fatalf("%s: expected non-nil expiresAt", tc.name)
+		}
+		if !got.Equal(*tc.want) {
+			t.Fatalf("%s: expiresAt got %s want %s", tc.name, got.UTC().Format(time.RFC3339), tc.want.UTC().Format(time.RFC3339))
+		}
+	}
+}
+
+func ptrTime(v time.Time) *time.Time {
+	return &v
+}

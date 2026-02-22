@@ -237,7 +237,7 @@ func runAdminToken(ctx context.Context, userService *service.UserService, args [
 func runAdminTokenCreate(ctx context.Context, userService *service.UserService, args []string) error {
 	if len(args) < 1 {
 		printUsage()
-		return fmt.Errorf("usage: admin token create <username_or_id> [description] [--ttl 7d|24h] [--expires-at 2026-12-31T23:59:59Z]")
+		return fmt.Errorf("usage: token create <username_or_id> [description] [--ttl 7d|24h] (default ttl: 7d)")
 	}
 
 	identifier := strings.TrimSpace(args[0])
@@ -245,7 +245,6 @@ func runAdminTokenCreate(ctx context.Context, userService *service.UserService, 
 	flagSet.SetOutput(io.Discard)
 	descriptionFlag := flagSet.String("description", "", "token description")
 	ttlFlag := flagSet.String("ttl", "", "token ttl, e.g. 24h")
-	expiresAtFlag := flagSet.String("expires-at", "", "token expiry in RFC3339")
 	if err := flagSet.Parse(args[1:]); err != nil {
 		return fmt.Errorf("parse token args failed: %w", err)
 	}
@@ -259,30 +258,9 @@ func runAdminTokenCreate(ctx context.Context, userService *service.UserService, 
 	}
 
 	ttlRaw := strings.TrimSpace(*ttlFlag)
-	expiresAtRaw := strings.TrimSpace(*expiresAtFlag)
-	if ttlRaw != "" && expiresAtRaw != "" {
-		return fmt.Errorf("--ttl and --expires-at cannot be used together")
-	}
-
-	var expiresAt *time.Time
-	if ttlRaw != "" {
-		ttl, err := parseTTL(ttlRaw)
-		if err != nil {
-			return fmt.Errorf("invalid --ttl %q: %w", ttlRaw, err)
-		}
-		if ttl <= 0 {
-			return fmt.Errorf("--ttl must be greater than 0")
-		}
-		v := time.Now().UTC().Add(ttl)
-		expiresAt = &v
-	}
-	if expiresAtRaw != "" {
-		v, err := time.Parse(time.RFC3339, expiresAtRaw)
-		if err != nil {
-			return fmt.Errorf("invalid --expires-at %q, expected RFC3339", expiresAtRaw)
-		}
-		v = v.UTC()
-		expiresAt = &v
+	expiresAt, err := resolveTokenExpiresAt(ttlRaw, time.Now().UTC())
+	if err != nil {
+		return err
 	}
 
 	user, token, err := userService.CreateAccessTokenForUserWithExpiry(ctx, identifier, description, expiresAt)
@@ -291,7 +269,7 @@ func runAdminTokenCreate(ctx context.Context, userService *service.UserService, 
 			return fmt.Errorf("create token failed: token collision, please retry")
 		}
 		if errors.Is(err, service.ErrInvalidTokenExpiry) {
-			return fmt.Errorf("create token failed: expires-at must be in the future")
+			return fmt.Errorf("create token failed: token expiry must be in the future")
 		}
 		return fmt.Errorf("create token failed: %w", err)
 	}
@@ -301,6 +279,22 @@ func runAdminTokenCreate(ctx context.Context, userService *service.UserService, 
 		fmt.Printf("expiresAt=%s\n", expiresAt.UTC().Format(time.RFC3339))
 	}
 	return nil
+}
+
+func resolveTokenExpiresAt(ttlRaw string, now time.Time) (*time.Time, error) {
+	ttlRaw = strings.TrimSpace(ttlRaw)
+	if ttlRaw == "" {
+		ttlRaw = "7d"
+	}
+	ttl, err := parseTTL(ttlRaw)
+	if err != nil {
+		return nil, fmt.Errorf("invalid --ttl %q: %w", ttlRaw, err)
+	}
+	if ttl <= 0 {
+		return nil, fmt.Errorf("--ttl must be greater than 0")
+	}
+	v := now.UTC().Add(ttl)
+	return &v, nil
 }
 
 func runAdminTokenList(ctx context.Context, userService *service.UserService, args []string) error {
@@ -583,7 +577,7 @@ func printUsage() {
 func printRuntimeConsoleUsage() {
 	fmt.Println("Runtime Console Commands:")
 	fmt.Println("  user create <username> <password> [display_name] [role]")
-	fmt.Println("  token create <username_or_id> [description] [--ttl 7d|24h] [--expires-at 2026-12-31T23:59:59Z]")
+	fmt.Println("  token create <username_or_id> [description] [--ttl 7d|24h]  # default ttl=7d")
 	fmt.Println("  token list <username_or_id> [--all]")
 	fmt.Println("  token revoke <token_id>")
 	fmt.Println("  registration status|enable|disable")
