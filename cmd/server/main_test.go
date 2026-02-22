@@ -223,3 +223,66 @@ func TestParseBoolInput(t *testing.T) {
 		}
 	}
 }
+
+func TestParseTokenListArgs(t *testing.T) {
+	tests := []struct {
+		name       string
+		args       []string
+		wantID     string
+		wantAll    bool
+		shouldFail bool
+	}{
+		{
+			name:    "identifier only",
+			args:    []string{"alice"},
+			wantID:  "alice",
+			wantAll: false,
+		},
+		{
+			name:    "identifier with all",
+			args:    []string{"alice", "--all"},
+			wantID:  "alice",
+			wantAll: true,
+		},
+		{
+			name:    "all before identifier",
+			args:    []string{"--all", "1"},
+			wantID:  "1",
+			wantAll: true,
+		},
+		{
+			name:       "missing identifier",
+			args:       []string{"--all"},
+			shouldFail: true,
+		},
+		{
+			name:       "unknown option",
+			args:       []string{"alice", "--unknown"},
+			shouldFail: true,
+		},
+		{
+			name:       "extra positional",
+			args:       []string{"alice", "bob"},
+			shouldFail: true,
+		},
+	}
+
+	for _, tc := range tests {
+		gotID, gotAll, err := parseTokenListArgs(tc.args)
+		if tc.shouldFail {
+			if err == nil {
+				t.Fatalf("%s: expected error, got nil", tc.name)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("%s: unexpected error: %v", tc.name, err)
+		}
+		if gotID != tc.wantID {
+			t.Fatalf("%s: id got %q want %q", tc.name, gotID, tc.wantID)
+		}
+		if gotAll != tc.wantAll {
+			t.Fatalf("%s: all got %v want %v", tc.name, gotAll, tc.wantAll)
+		}
+	}
+}

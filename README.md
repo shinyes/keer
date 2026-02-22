@@ -317,17 +317,19 @@ token create alice --expires-at 2026-12-31T23:59:59Z
 ### 2.1) 查看用户的 Access Token 列表
 
 ```text
-token list <username_or_id>
+token list <username_or_id> [--all]
 ```
 
 示例：
 
 ```text
 token list alice
+token list alice --all
 ```
 
 说明：
 
+- 默认只显示未撤销 token，使用 `--all` 可包含已撤销 token 历史
 - 会输出 token 元信息：`id`、`token_prefix`、创建时间、过期时间、撤销时间、最后使用时间、描述
 - 出于安全原因，不会输出完整 token 明文
 

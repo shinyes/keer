@@ -304,11 +304,11 @@ func runAdminTokenCreate(ctx context.Context, userService *service.UserService, 
 }
 
 func runAdminTokenList(ctx context.Context, userService *service.UserService, args []string) error {
-	if len(args) < 1 {
+	identifier, includeAll, err := parseTokenListArgs(args)
+	if err != nil {
 		printUsage()
-		return fmt.Errorf("usage: admin token list <username_or_id>")
+		return err
 	}
-	identifier := strings.TrimSpace(args[0])
 	user, tokens, err := userService.ListAccessTokensForUser(ctx, identifier)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -317,9 +317,23 @@ func runAdminTokenList(ctx context.Context, userService *service.UserService, ar
 		return fmt.Errorf("list tokens failed: %w", err)
 	}
 
-	fmt.Printf("tokens for user=%s(%d), count=%d\n", user.Username, user.ID, len(tokens))
+	filtered := tokens
+	if !includeAll {
+		filtered = make([]models.PersonalAccessToken, 0, len(tokens))
+		for _, token := range tokens {
+			if token.RevokedAt == nil {
+				filtered = append(filtered, token)
+			}
+		}
+	}
+
+	scope := "active"
+	if includeAll {
+		scope = "all"
+	}
+	fmt.Printf("tokens for user=%s(%d), count=%d, scope=%s\n", user.Username, user.ID, len(filtered), scope)
 	fmt.Println("id\tprefix\tcreatedAt\texpiresAt\trevokedAt\tlastUsedAt\tdescription")
-	for _, token := range tokens {
+	for _, token := range filtered {
 		fmt.Printf(
 			"%d\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			token.ID,
@@ -332,6 +346,37 @@ func runAdminTokenList(ctx context.Context, userService *service.UserService, ar
 		)
 	}
 	return nil
+}
+
+func parseTokenListArgs(args []string) (string, bool, error) {
+	if len(args) == 0 {
+		return "", false, fmt.Errorf("usage: token list <username_or_id> [--all]")
+	}
+
+	includeAll := false
+	identifier := ""
+	for _, arg := range args {
+		value := strings.TrimSpace(arg)
+		if value == "" {
+			continue
+		}
+		if value == "--all" {
+			includeAll = true
+			continue
+		}
+		if strings.HasPrefix(value, "--") {
+			return "", false, fmt.Errorf("unknown option: %s", value)
+		}
+		if identifier == "" {
+			identifier = value
+			continue
+		}
+		return "", false, fmt.Errorf("unexpected argument: %s", value)
+	}
+	if identifier == "" {
+		return "", false, fmt.Errorf("usage: token list <username_or_id> [--all]")
+	}
+	return identifier, includeAll, nil
 }
 
 func runAdminTokenRevoke(ctx context.Context, userService *service.UserService, args []string) error {
@@ -539,7 +584,7 @@ func printRuntimeConsoleUsage() {
 	fmt.Println("Runtime Console Commands:")
 	fmt.Println("  user create <username> <password> [display_name] [role]")
 	fmt.Println("  token create <username_or_id> [description] [--ttl 7d|24h] [--expires-at 2026-12-31T23:59:59Z]")
-	fmt.Println("  token list <username_or_id>")
+	fmt.Println("  token list <username_or_id> [--all]")
 	fmt.Println("  token revoke <token_id>")
 	fmt.Println("  registration status|enable|disable")
 	fmt.Println("  storage status|set-local|set-s3 ...|wizard")
