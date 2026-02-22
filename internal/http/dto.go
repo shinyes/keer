@@ -1,0 +1,133 @@
+package http
+
+import "time"
+
+type getCurrentUserResponse struct {
+	User apiUser `json:"user"`
+}
+
+type signInRequest struct {
+	PasswordCredentials *signInPasswordCredentials `json:"passwordCredentials"`
+}
+
+type signInPasswordCredentials struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+type signInResponse struct {
+	User                 apiUser `json:"user"`
+	AccessToken          string  `json:"accessToken"`
+	AccessTokenExpiresAt string  `json:"accessTokenExpiresAt,omitempty"`
+}
+
+type createUserRequest struct {
+	User         createUserBody `json:"user"`
+	UserID       string         `json:"userId"`
+	ValidateOnly bool           `json:"validateOnly"`
+	RequestID    string         `json:"requestId"`
+}
+
+type createUserBody struct {
+	Name        string `json:"name"`
+	Role        string `json:"role"`
+	Username    string `json:"username"`
+	DisplayName string `json:"displayName"`
+	AvatarURL   string `json:"avatarUrl"`
+	Description string `json:"description"`
+	Password    string `json:"password"`
+	State       string `json:"state"`
+}
+
+type apiUser struct {
+	Name        string `json:"name"`
+	Role        string `json:"role,omitempty"`
+	Username    string `json:"username"`
+	DisplayName string `json:"displayName,omitempty"`
+	AvatarURL   string `json:"avatarUrl,omitempty"`
+	Description string `json:"description,omitempty"`
+	State       string `json:"state,omitempty"`
+	CreateTime  string `json:"createTime,omitempty"`
+	UpdateTime  string `json:"updateTime,omitempty"`
+}
+
+type listMemosResponse struct {
+	Memos         []apiMemo `json:"memos"`
+	NextPageToken string    `json:"nextPageToken,omitempty"`
+}
+
+type createMemoRequest struct {
+	Content     string          `json:"content"`
+	Visibility  string          `json:"visibility"`
+	Attachments []apiAttachment `json:"attachments"`
+}
+
+type updateMemoRequest struct {
+	Content     *string          `json:"content"`
+	Visibility  *string          `json:"visibility"`
+	State       *string          `json:"state"`
+	Pinned      *bool            `json:"pinned"`
+	Attachments *[]apiAttachment `json:"attachments"`
+}
+
+type apiMemo struct {
+	Name        string          `json:"name"`
+	State       string          `json:"state,omitempty"`
+	Creator     string          `json:"creator,omitempty"`
+	CreateTime  string          `json:"createTime,omitempty"`
+	UpdateTime  string          `json:"updateTime,omitempty"`
+	DisplayTime string          `json:"displayTime,omitempty"`
+	Content     string          `json:"content,omitempty"`
+	Visibility  string          `json:"visibility,omitempty"`
+	Pinned      bool            `json:"pinned"`
+	Attachments []apiAttachment `json:"attachments,omitempty"`
+	Tags        []string        `json:"tags,omitempty"`
+}
+
+type createAttachmentRequest struct {
+	Filename string  `json:"filename"`
+	Type     string  `json:"type"`
+	Content  string  `json:"content"`
+	Memo     *string `json:"memo"`
+}
+
+type listAttachmentsResponse struct {
+	Attachments []apiAttachment `json:"attachments"`
+}
+
+type apiAttachment struct {
+	Name         string `json:"name"`
+	CreateTime   string `json:"createTime,omitempty"`
+	Filename     string `json:"filename,omitempty"`
+	ExternalLink string `json:"externalLink,omitempty"`
+	Type         string `json:"type,omitempty"`
+	Size         string `json:"size,omitempty"`
+	Memo         string `json:"memo,omitempty"`
+}
+
+type userSettingResponse struct {
+	GeneralSetting generalSetting `json:"generalSetting"`
+}
+
+type generalSetting struct {
+	MemoVisibility string `json:"memoVisibility,omitempty"`
+}
+
+type userStatsResponse struct {
+	TagCount map[string]int `json:"tagCount"`
+}
+
+type profileResponse struct {
+	Version string `json:"version"`
+}
+
+func formatTime(t time.Time) string {
+	return t.UTC().Format(time.RFC3339Nano)
+}
+
+func formatMaybeTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return formatTime(t)
+}
