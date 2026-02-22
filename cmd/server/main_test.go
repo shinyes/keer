@@ -62,8 +62,8 @@ func TestParseCommandLine(t *testing.T) {
 		},
 		{
 			name:  "apostrophe in token",
-			input: "user create cyk cyk'slife cyk admin",
-			want:  []string{"user", "create", "cyk", "cyk'slife", "cyk", "admin"},
+			input: "user create foo secret foo admin",
+			want:  []string{"user", "create", "foo", "secret", "foo", "admin"},
 		},
 		{
 			name:    "unterminated quote",
