@@ -46,10 +46,7 @@ type MemoWithAttachments struct {
 }
 
 func (s *MemoService) CreateMemo(ctx context.Context, creatorID int64, input CreateMemoInput) (MemoWithAttachments, error) {
-	content := strings.TrimSpace(input.Content)
-	if content == "" {
-		return MemoWithAttachments{}, fmt.Errorf("content cannot be empty")
-	}
+	content := input.Content
 	visibility := input.Visibility
 	if !visibility.IsValid() {
 		visibility = models.VisibilityPrivate
@@ -103,10 +100,7 @@ func (s *MemoService) UpdateMemo(ctx context.Context, updaterID int64, memoID in
 
 	update := store.MemoUpdate{}
 	if input.Content != nil {
-		content := strings.TrimSpace(*input.Content)
-		if content == "" {
-			return MemoWithAttachments{}, fmt.Errorf("content cannot be empty")
-		}
+		content := *input.Content
 		update.Content = &content
 		payload, err := s.markdown.ExtractPayload(content)
 		if err != nil {
@@ -320,7 +314,14 @@ func (s *MemoService) resolveAttachmentIDsFromNames(ctx context.Context, userID 
 
 func parseResourceID(name string) (int64, error) {
 	name = strings.TrimSpace(name)
-	name = strings.TrimPrefix(name, "attachments/")
+	if name == "" {
+		return 0, fmt.Errorf("invalid attachment name")
+	}
+	name = strings.SplitN(name, "|", 2)[0]
+	name = strings.Trim(name, "/")
+	if idx := strings.LastIndex(name, "/"); idx >= 0 {
+		name = name[idx+1:]
+	}
 	if name == "" {
 		return 0, fmt.Errorf("invalid attachment name")
 	}

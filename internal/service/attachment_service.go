@@ -53,6 +53,18 @@ func (s *AttachmentService) CreateAttachment(ctx context.Context, userID int64, 
 		return models.Attachment{}, fmt.Errorf("invalid base64 content")
 	}
 
+	var memoID *int64
+	if input.MemoName != nil {
+		id, err := parseMemoID(*input.MemoName)
+		if err != nil {
+			return models.Attachment{}, err
+		}
+		if _, err := s.store.GetMemoByIDAndCreator(ctx, id, userID); err != nil {
+			return models.Attachment{}, err
+		}
+		memoID = &id
+	}
+
 	storageKey := fmt.Sprintf("attachments/%d/%d/%s", userID, time.Now().UTC().UnixNano(), filename)
 	size, err := s.storage.Put(ctx, storageKey, contentType, data)
 	if err != nil {
@@ -74,24 +86,17 @@ func (s *AttachmentService) CreateAttachment(ctx context.Context, userID int64, 
 		return models.Attachment{}, err
 	}
 
-	if input.MemoName != nil {
-		memoID, err := parseMemoID(*input.MemoName)
+	if memoID != nil {
+		attachedMap, err := s.store.ListAttachmentsByMemoIDs(ctx, []int64{*memoID})
 		if err != nil {
 			return models.Attachment{}, err
 		}
-		if _, err := s.store.GetMemoByIDAndCreator(ctx, memoID, userID); err != nil {
-			return models.Attachment{}, err
-		}
-		attachedMap, err := s.store.ListAttachmentsByMemoIDs(ctx, []int64{memoID})
-		if err != nil {
-			return models.Attachment{}, err
-		}
-		attachmentIDs := make([]int64, 0, len(attachedMap[memoID])+1)
-		for _, item := range attachedMap[memoID] {
+		attachmentIDs := make([]int64, 0, len(attachedMap[*memoID])+1)
+		for _, item := range attachedMap[*memoID] {
 			attachmentIDs = append(attachmentIDs, item.ID)
 		}
 		attachmentIDs = append(attachmentIDs, attachment.ID)
-		if err := s.store.SetMemoAttachments(ctx, memoID, attachmentIDs); err != nil {
+		if err := s.store.SetMemoAttachments(ctx, *memoID, attachmentIDs); err != nil {
 			return models.Attachment{}, err
 		}
 	}
@@ -131,7 +136,14 @@ func (s *AttachmentService) OpenAttachment(ctx context.Context, attachmentID int
 
 func parseMemoID(name string) (int64, error) {
 	raw := strings.TrimSpace(name)
-	raw = strings.TrimPrefix(raw, "memos/")
+	if raw == "" {
+		return 0, fmt.Errorf("invalid memo name")
+	}
+	raw = strings.SplitN(raw, "|", 2)[0]
+	raw = strings.Trim(raw, "/")
+	if idx := strings.LastIndex(raw, "/"); idx >= 0 {
+		raw = raw[idx+1:]
+	}
 	if raw == "" {
 		return 0, fmt.Errorf("invalid memo name")
 	}

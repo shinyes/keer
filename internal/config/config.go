@@ -28,6 +28,7 @@ type Config struct {
 	BaseURL           string
 	DBPath            string
 	UploadsDir        string
+	BodyLimitMB       int
 	Version           string
 	Storage           StorageBackend
 	S3                S3Config
@@ -42,6 +43,7 @@ func Load() (Config, error) {
 		BaseURL:           strings.TrimRight(env("BASE_URL", "http://localhost:8080"), "/"),
 		DBPath:            env("DB_PATH", "./data/keer.db"),
 		UploadsDir:        env("UPLOADS_DIR", "./data/uploads"),
+		BodyLimitMB:       envInt("HTTP_BODY_LIMIT_MB", 64),
 		Version:           env("MEMOS_VERSION", "0.26.1"),
 		Storage:           StorageBackend(strings.ToLower(env("STORAGE_BACKEND", "local"))),
 		AllowRegistration: envBool("ALLOW_REGISTRATION", true),
@@ -104,6 +106,18 @@ func envBool(key string, fallback bool) bool {
 	}
 	parsed, err := strconv.ParseBool(v)
 	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func envInt(key string, fallback int) int {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(v)
+	if err != nil || parsed <= 0 {
 		return fallback
 	}
 	return parsed

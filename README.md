@@ -77,6 +77,7 @@ go run ./cmd/server
 - `BASE_URL`：服务基地址，默认 `http://localhost:8080`
 - `DB_PATH`：SQLite 文件路径，默认 `./data/keer.db`
 - `UPLOADS_DIR`：本地附件目录，默认 `./data/uploads`（仅 local 模式使用）
+- `HTTP_BODY_LIMIT_MB`：HTTP 请求体大小上限（MiB），默认 `64`（建议保留默认以兼容较大附件的 Base64 上传）
 - `MEMOS_VERSION`：`/api/v1/instance/profile` 返回版本，默认 `0.26.1`
 - `STORAGE_BACKEND`：`local` 或 `s3`，默认 `local`
 - `S3_ENDPOINT`：S3 端点地址
@@ -178,6 +179,7 @@ Content-Type: application/json
 - `PATCH /api/v1/memos/{id}` 且 `content` 变更：重建 payload
 - `PATCH /api/v1/memos/{id}` 仅改可见性/置顶等：不重算 tags
 - 服务端不以客户端传入 tags 作为真实来源
+- 兼容 memos 行为：允许空内容 memo（如“仅附件 memo”）
 
 ### 统计
 

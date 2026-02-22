@@ -16,7 +16,13 @@ import (
 )
 
 func NewRouter(cfg config.Config, userService *service.UserService, memoService *service.MemoService, attachmentService *service.AttachmentService) *fiber.App {
-	app := fiber.New()
+	bodyLimit := cfg.BodyLimitMB * 1024 * 1024
+	if bodyLimit <= 0 {
+		bodyLimit = 64 * 1024 * 1024
+	}
+	app := fiber.New(fiber.Config{
+		BodyLimit: bodyLimit,
+	})
 	app.Use(cors.New())
 
 	app.Get("/api/v1/instance/profile", func(c *fiber.Ctx) error {
