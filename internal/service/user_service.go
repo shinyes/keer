@@ -62,7 +62,7 @@ func (s *UserService) GetUserByIdentifier(ctx context.Context, identifier string
 	if userID, err := strconv.ParseInt(identifier, 10, 64); err == nil {
 		return s.store.GetUserByID(ctx, userID)
 	}
-	return s.store.GetUserByUsername(ctx, identifier)
+	return s.store.GetUserByUsername(ctx, normalizeUsername(identifier))
 }
 
 func (s *UserService) AuthenticateToken(ctx context.Context, rawToken string) (models.User, error) {
@@ -79,7 +79,7 @@ func (s *UserService) AuthenticateToken(ctx context.Context, rawToken string) (m
 }
 
 func (s *UserService) EnsureBootstrap(ctx context.Context, username string, rawToken string) error {
-	username = strings.TrimSpace(username)
+	username = normalizeUsername(username)
 	rawToken = strings.TrimSpace(rawToken)
 	if username == "" || rawToken == "" {
 		return nil
@@ -109,12 +109,12 @@ func (s *UserService) EnsureBootstrap(ctx context.Context, username string, rawT
 }
 
 func (s *UserService) CreateUser(ctx context.Context, creator *models.User, input CreateUserInput, allowRegistration bool) (models.User, error) {
-	username := strings.TrimSpace(input.Username)
+	username := normalizeUsername(input.Username)
 	displayName := strings.TrimSpace(input.DisplayName)
 	password := strings.TrimSpace(input.Password)
 	role := normalizeUserRole(input.Role)
 
-	if !usernamePattern.MatchString(strings.ToLower(username)) {
+	if !usernamePattern.MatchString(username) {
 		return models.User{}, ErrInvalidUsername
 	}
 	if displayName == "" {
@@ -253,7 +253,7 @@ func (s *UserService) RevokeAccessTokenByID(ctx context.Context, tokenID int64) 
 }
 
 func (s *UserService) SignInWithPassword(ctx context.Context, username string, password string) (models.User, string, error) {
-	username = strings.TrimSpace(username)
+	username = normalizeUsername(username)
 	if username == "" || password == "" {
 		return models.User{}, "", ErrInvalidCredentials
 	}
@@ -285,6 +285,10 @@ func isUniqueConstraintErr(err error) bool {
 	}
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "unique constraint failed") || strings.Contains(msg, "constraint failed")
+}
+
+func normalizeUsername(raw string) string {
+	return strings.ToLower(strings.TrimSpace(raw))
 }
 
 func (s *UserService) createAccessToken(ctx context.Context, userID int64, description string, expiresAt *time.Time) (string, error) {

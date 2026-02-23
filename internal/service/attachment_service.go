@@ -184,7 +184,17 @@ func parseMemoID(name string) (int64, error) {
 func sanitizeFilename(filename string) string {
 	filename = strings.TrimSpace(filename)
 	filename = filepath.Base(filename)
-	if filename == "." {
+	if filename == "." || filename == ".." {
+		return ""
+	}
+	filename = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, filename)
+	filename = strings.TrimSpace(filename)
+	if filename == "" {
 		return ""
 	}
 	return filename

@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
+	"mime"
 	"strconv"
 	"strings"
 
@@ -68,9 +70,12 @@ func NewRouter(cfg config.Config, userService *service.UserService, memoService 
 
 		creator, err := OptionalAuthenticateToken(c, userService)
 		if err != nil {
-			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-				"message": "invalid access token",
-			})
+			if errors.Is(err, sql.ErrNoRows) {
+				return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+					"message": "invalid access token",
+				})
+			}
+			return internalError(c, fmt.Errorf("authenticate optional token: %w", err))
 		}
 
 		allowRegistration, err := userService.ResolveAllowRegistration(c.Context(), cfg.AllowRegistration)
@@ -378,7 +383,7 @@ func NewRouter(cfg config.Config, userService *service.UserService, memoService 
 		}
 
 		c.Set(fiber.HeaderContentType, attachment.Type)
-		c.Set(fiber.HeaderContentDisposition, fmt.Sprintf(`inline; filename="%s"`, attachment.Filename))
+		c.Set(fiber.HeaderContentDisposition, inlineContentDisposition(attachment.Filename))
 		return c.SendStream(rc, int(attachment.Size))
 	})
 
@@ -466,7 +471,33 @@ func notFound(c *fiber.Ctx, message string) error {
 }
 
 func internalError(c *fiber.Ctx, err error) error {
+	log.Printf("internal error method=%s path=%s err=%v", c.Method(), c.Path(), err)
 	return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-		"message": err.Error(),
+		"message": "internal server error",
 	})
+}
+
+func inlineContentDisposition(filename string) string {
+	filename = sanitizeContentDispositionFilename(filename)
+	if filename == "" {
+		return "inline"
+	}
+	value := mime.FormatMediaType("inline", map[string]string{"filename": filename})
+	if value == "" {
+		return "inline"
+	}
+	return value
+}
+
+func sanitizeContentDispositionFilename(filename string) string {
+	filename = strings.TrimSpace(filename)
+	if filename == "" {
+		return ""
+	}
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f || r == '"' || r == '\\' || r == ';' {
+			return '_'
+		}
+		return r
+	}, filename)
 }

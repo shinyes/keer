@@ -107,7 +107,7 @@ func (s *SQLStore) GetUserByUsername(ctx context.Context, username string) (mode
 		ctx,
 		`SELECT id, username, display_name, password_hash, role, default_visibility, create_time, update_time
 		FROM users
-		WHERE username = ?`,
+		WHERE username = ? COLLATE NOCASE`,
 		username,
 	).Scan(
 		&user.ID,

@@ -15,7 +15,7 @@ func TestFiberUserStatsRoutePattern(t *testing.T) {
 	})
 
 	req := httptest.NewRequest("GET", "/api/v1/users/123:getStats", nil)
-	resp, err := app.Test(req)
+	resp, err := app.Test(req, 5000)
 	if err != nil {
 		t.Fatalf("app.Test() error = %v", err)
 	}

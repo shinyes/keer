@@ -9,7 +9,7 @@ func Migrate(db *sql.DB) error {
 	stmts := []string{
 		`CREATE TABLE IF NOT EXISTS users (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			username TEXT NOT NULL UNIQUE,
+			username TEXT NOT NULL UNIQUE COLLATE NOCASE,
 			display_name TEXT NOT NULL,
 			email TEXT NOT NULL DEFAULT '',
 			password_hash TEXT NOT NULL DEFAULT '',

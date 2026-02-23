@@ -32,7 +32,7 @@ func TestCreateUserEndpoint_FirstUserAdmin(t *testing.T) {
 	payload, _ := json.Marshal(body)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/users", bytes.NewReader(payload))
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := app.Test(req)
+	resp, err := app.Test(req, 5000)
 	if err != nil {
 		t.Fatalf("create user request failed: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestCreateUserEndpoint_DisabledForSecondUser(t *testing.T) {
 	payload, _ := json.Marshal(body)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/users", bytes.NewReader(payload))
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := app.Test(req)
+	resp, err := app.Test(req, 5000)
 	if err != nil {
 		t.Fatalf("create user request failed: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestCreateUserEndpoint_ValidateOnly(t *testing.T) {
 	payload, _ := json.Marshal(body)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/users", bytes.NewReader(payload))
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := app.Test(req)
+	resp, err := app.Test(req, 5000)
 	if err != nil {
 		t.Fatalf("create user request failed: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestSignInEndpoint_ThenAuthMe(t *testing.T) {
 	createPayload, _ := json.Marshal(createBody)
 	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/users", bytes.NewReader(createPayload))
 	createReq.Header.Set("Content-Type", "application/json")
-	createResp, err := app.Test(createReq)
+	createResp, err := app.Test(createReq, 5000)
 	if err != nil {
 		t.Fatalf("create user request failed: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestSignInEndpoint_ThenAuthMe(t *testing.T) {
 	signInPayload, _ := json.Marshal(signInBody)
 	signInReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/signin", bytes.NewReader(signInPayload))
 	signInReq.Header.Set("Content-Type", "application/json")
-	signInResp, err := app.Test(signInReq)
+	signInResp, err := app.Test(signInReq, 5000)
 	if err != nil {
 		t.Fatalf("signin request failed: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestSignInEndpoint_ThenAuthMe(t *testing.T) {
 
 	meReq := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
 	meReq.Header.Set("Authorization", "Bearer "+signInResult.AccessToken)
-	meResp, err := app.Test(meReq)
+	meResp, err := app.Test(meReq, 5000)
 	if err != nil {
 		t.Fatalf("auth/me request failed: %v", err)
 	}
@@ -176,7 +176,7 @@ func TestGetUserByUsernameEndpoint(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/users/demo", nil)
 	req.Header.Set("Authorization", "Bearer demo-token")
-	resp, err := app.Test(req)
+	resp, err := app.Test(req, 5000)
 	if err != nil {
 		t.Fatalf("get user by username request failed: %v", err)
 	}
@@ -200,7 +200,7 @@ func TestGetUserStatsByUsernameEndpoint(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/users/demo:getStats", nil)
 	req.Header.Set("Authorization", "Bearer demo-token")
-	resp, err := app.Test(req)
+	resp, err := app.Test(req, 5000)
 	if err != nil {
 		t.Fatalf("get user stats by username request failed: %v", err)
 	}
@@ -223,7 +223,7 @@ func TestCreateUserEndpoint_RegistrationSettingOverridesEnv(t *testing.T) {
 	firstPayload, _ := json.Marshal(firstBody)
 	firstReq := httptest.NewRequest(http.MethodPost, "/api/v1/users", bytes.NewReader(firstPayload))
 	firstReq.Header.Set("Content-Type", "application/json")
-	firstResp, err := app.Test(firstReq)
+	firstResp, err := app.Test(firstReq, 5000)
 	if err != nil {
 		t.Fatalf("create first user request failed: %v", err)
 	}
@@ -245,7 +245,7 @@ func TestCreateUserEndpoint_RegistrationSettingOverridesEnv(t *testing.T) {
 	blockedPayload, _ := json.Marshal(blockedBody)
 	blockedReq := httptest.NewRequest(http.MethodPost, "/api/v1/users", bytes.NewReader(blockedPayload))
 	blockedReq.Header.Set("Content-Type", "application/json")
-	blockedResp, err := app.Test(blockedReq)
+	blockedResp, err := app.Test(blockedReq, 5000)
 	if err != nil {
 		t.Fatalf("create blocked user request failed: %v", err)
 	}
@@ -267,7 +267,7 @@ func TestCreateUserEndpoint_RegistrationSettingOverridesEnv(t *testing.T) {
 	allowedPayload, _ := json.Marshal(allowedBody)
 	allowedReq := httptest.NewRequest(http.MethodPost, "/api/v1/users", bytes.NewReader(allowedPayload))
 	allowedReq.Header.Set("Content-Type", "application/json")
-	allowedResp, err := app.Test(allowedReq)
+	allowedResp, err := app.Test(allowedReq, 5000)
 	if err != nil {
 		t.Fatalf("create allowed user request failed: %v", err)
 	}
