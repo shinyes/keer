@@ -370,7 +370,8 @@ func NewRouter(cfg config.Config, userService *service.UserService, memoService 
 			}
 			return internalError(c, err)
 		}
-		defer rc.Close()
+		// Do not close rc here. Fiber/fasthttp sends the stream after the handler
+		// returns, and early close can truncate the response on the client side.
 
 		if attachment.CreatorID != currentUser.ID {
 			return c.SendStatus(fiber.StatusForbidden)
