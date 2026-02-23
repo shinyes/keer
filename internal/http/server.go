@@ -368,22 +368,49 @@ func NewRouter(cfg config.Config, userService *service.UserService, memoService 
 			return badRequest(c, "invalid attachment id")
 		}
 
-		attachment, rc, err := attachmentService.OpenAttachment(c.Context(), attachmentID)
+		attachment, err := attachmentService.GetAttachment(c.Context(), attachmentID)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return notFound(c, "attachment not found")
 			}
 			return internalError(c, err)
 		}
-		// Do not close rc here. Fiber/fasthttp sends the stream after the handler
-		// returns, and early close can truncate the response on the client side.
 
 		if attachment.CreatorID != currentUser.ID {
 			return c.SendStatus(fiber.StatusForbidden)
 		}
 
+		start, end, hasRange, err := parseSingleByteRange(c.Get(fiber.HeaderRange), attachment.Size)
+		if err != nil {
+			c.Set(fiber.HeaderAcceptRanges, "bytes")
+			c.Set(fiber.HeaderContentRange, fmt.Sprintf("bytes */%d", attachment.Size))
+			return c.SendStatus(fiber.StatusRequestedRangeNotSatisfiable)
+		}
+
+		c.Set(fiber.HeaderAcceptRanges, "bytes")
 		c.Set(fiber.HeaderContentType, attachment.Type)
 		c.Set(fiber.HeaderContentDisposition, inlineContentDisposition(attachment.Filename))
+
+		if hasRange {
+			rangedStream, err := attachmentService.OpenAttachmentRangeStream(c.Context(), attachment, start, end)
+			if err != nil {
+				return internalError(c, err)
+			}
+
+			length := end - start + 1
+			c.Set(fiber.HeaderContentRange, fmt.Sprintf("bytes %d-%d/%d", start, end, attachment.Size))
+			c.Set(fiber.HeaderContentLength, models.Int64ToString(length))
+			c.Status(fiber.StatusPartialContent)
+			return c.SendStream(rangedStream, int(length))
+		}
+
+		rc, err := attachmentService.OpenAttachmentStream(c.Context(), attachment)
+		if err != nil {
+			return internalError(c, err)
+		}
+		// Do not close rc here. Fiber/fasthttp sends the stream after the handler
+		// returns, and early close can truncate the response on the client side.
+		c.Set(fiber.HeaderContentLength, models.Int64ToString(attachment.Size))
 		return c.SendStream(rc, int(attachment.Size))
 	})
 
@@ -456,6 +483,66 @@ func parseID(raw string) (int64, error) {
 		return 0, fmt.Errorf("empty id")
 	}
 	return strconv.ParseInt(raw, 10, 64)
+}
+
+func parseSingleByteRange(raw string, size int64) (start int64, end int64, hasRange bool, err error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, 0, false, nil
+	}
+	hasRange = true
+
+	if size <= 0 {
+		return 0, 0, true, fmt.Errorf("invalid resource size")
+	}
+	if !strings.HasPrefix(raw, "bytes=") {
+		return 0, 0, true, fmt.Errorf("unsupported range unit")
+	}
+
+	spec := strings.TrimSpace(strings.TrimPrefix(raw, "bytes="))
+	if spec == "" || strings.Contains(spec, ",") {
+		return 0, 0, true, fmt.Errorf("invalid range")
+	}
+
+	parts := strings.SplitN(spec, "-", 2)
+	if len(parts) != 2 {
+		return 0, 0, true, fmt.Errorf("invalid range")
+	}
+	left := strings.TrimSpace(parts[0])
+	right := strings.TrimSpace(parts[1])
+
+	if left == "" {
+		// Suffix-byte-range-spec: bytes=-N
+		suffixLength, parseErr := strconv.ParseInt(right, 10, 64)
+		if parseErr != nil || suffixLength <= 0 {
+			return 0, 0, true, fmt.Errorf("invalid suffix range")
+		}
+		if suffixLength > size {
+			suffixLength = size
+		}
+		return size - suffixLength, size - 1, true, nil
+	}
+
+	rangeStart, parseErr := strconv.ParseInt(left, 10, 64)
+	if parseErr != nil || rangeStart < 0 {
+		return 0, 0, true, fmt.Errorf("invalid range start")
+	}
+	if rangeStart >= size {
+		return 0, 0, true, fmt.Errorf("range start out of bounds")
+	}
+
+	if right == "" {
+		return rangeStart, size - 1, true, nil
+	}
+
+	rangeEnd, parseErr := strconv.ParseInt(right, 10, 64)
+	if parseErr != nil || rangeEnd < rangeStart {
+		return 0, 0, true, fmt.Errorf("invalid range end")
+	}
+	if rangeEnd >= size {
+		rangeEnd = size - 1
+	}
+	return rangeStart, rangeEnd, true, nil
 }
 
 func badRequest(c *fiber.Ctx, message string) error {

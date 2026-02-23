@@ -149,12 +149,36 @@ func (s *AttachmentService) DeleteAttachment(ctx context.Context, userID int64, 
 	return s.store.DeleteAttachment(ctx, attachmentID)
 }
 
+func (s *AttachmentService) GetAttachment(ctx context.Context, attachmentID int64) (models.Attachment, error) {
+	return s.store.GetAttachmentByID(ctx, attachmentID)
+}
+
+func (s *AttachmentService) OpenAttachmentStream(ctx context.Context, attachment models.Attachment) (io.ReadCloser, error) {
+	return s.storage.Open(ctx, attachment.StorageKey)
+}
+
+func (s *AttachmentService) OpenAttachmentRangeStream(ctx context.Context, attachment models.Attachment, start int64, end int64) (io.ReadCloser, error) {
+	return s.storage.OpenRange(ctx, attachment.StorageKey, start, end)
+}
+
 func (s *AttachmentService) OpenAttachment(ctx context.Context, attachmentID int64) (models.Attachment, io.ReadCloser, error) {
-	attachment, err := s.store.GetAttachmentByID(ctx, attachmentID)
+	attachment, err := s.GetAttachment(ctx, attachmentID)
 	if err != nil {
 		return models.Attachment{}, nil, err
 	}
-	rc, err := s.storage.Open(ctx, attachment.StorageKey)
+	rc, err := s.OpenAttachmentStream(ctx, attachment)
+	if err != nil {
+		return models.Attachment{}, nil, err
+	}
+	return attachment, rc, nil
+}
+
+func (s *AttachmentService) OpenAttachmentRange(ctx context.Context, attachmentID int64, start int64, end int64) (models.Attachment, io.ReadCloser, error) {
+	attachment, err := s.GetAttachment(ctx, attachmentID)
+	if err != nil {
+		return models.Attachment{}, nil, err
+	}
+	rc, err := s.OpenAttachmentRangeStream(ctx, attachment, start, end)
 	if err != nil {
 		return models.Attachment{}, nil, err
 	}

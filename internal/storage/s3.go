@@ -66,6 +66,33 @@ func (s *S3Store) Open(ctx context.Context, key string) (io.ReadCloser, error) {
 	return obj.Body, nil
 }
 
+func (s *S3Store) OpenRange(ctx context.Context, key string, start int64, end int64) (io.ReadCloser, error) {
+	if start < 0 {
+		return nil, fmt.Errorf("invalid range start")
+	}
+	if end >= 0 && end < start {
+		return nil, fmt.Errorf("invalid range end")
+	}
+
+	input := &s3.GetObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(key),
+	}
+	if start > 0 || end >= 0 {
+		if end >= 0 {
+			input.Range = aws.String(fmt.Sprintf("bytes=%d-%d", start, end))
+		} else {
+			input.Range = aws.String(fmt.Sprintf("bytes=%d-", start))
+		}
+	}
+
+	obj, err := s.client.GetObject(ctx, input)
+	if err != nil {
+		return nil, fmt.Errorf("get s3 object with range: %w", err)
+	}
+	return obj.Body, nil
+}
+
 func (s *S3Store) Delete(ctx context.Context, key string) error {
 	_, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{
 		Bucket: aws.String(s.bucket),
