@@ -808,6 +808,30 @@ func (s *SQLStore) CreateAttachment(ctx context.Context, creatorID int64, filena
 	return attachment, nil
 }
 
+func (s *SQLStore) UpdateAttachmentThumbnail(
+	ctx context.Context,
+	attachmentID int64,
+	thumbnailFilename string,
+	thumbnailType string,
+	thumbnailSize int64,
+	thumbnailStorageType string,
+	thumbnailStorageKey string,
+) error {
+	_, err := s.db.ExecContext(
+		ctx,
+		`UPDATE attachments
+		SET thumbnail_filename = ?, thumbnail_type = ?, thumbnail_size = ?, thumbnail_storage_type = ?, thumbnail_storage_key = ?
+		WHERE id = ?`,
+		thumbnailFilename,
+		thumbnailType,
+		thumbnailSize,
+		thumbnailStorageType,
+		thumbnailStorageKey,
+		attachmentID,
+	)
+	return err
+}
+
 func (s *SQLStore) CreateAttachmentUploadSession(ctx context.Context, session models.AttachmentUploadSession) (models.AttachmentUploadSession, error) {
 	if session.ID == "" {
 		return models.AttachmentUploadSession{}, fmt.Errorf("upload session id is required")
@@ -917,7 +941,7 @@ func (s *SQLStore) FindAttachmentByContentHash(ctx context.Context, creatorID in
 	var createTime string
 	err := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, creator_id, filename, external_link, type, size, storage_type, storage_key, create_time
+		`SELECT id, creator_id, filename, external_link, type, size, storage_type, storage_key, thumbnail_filename, thumbnail_type, thumbnail_size, thumbnail_storage_type, thumbnail_storage_key, create_time
 		FROM attachments
 		WHERE creator_id = ? AND content_hash = ?
 		ORDER BY id DESC
@@ -933,6 +957,11 @@ func (s *SQLStore) FindAttachmentByContentHash(ctx context.Context, creatorID in
 		&attachment.Size,
 		&attachment.StorageType,
 		&attachment.StorageKey,
+		&attachment.ThumbnailFilename,
+		&attachment.ThumbnailType,
+		&attachment.ThumbnailSize,
+		&attachment.ThumbnailStorageType,
+		&attachment.ThumbnailStorageKey,
 		&createTime,
 	)
 	if err != nil {
@@ -954,7 +983,7 @@ func (s *SQLStore) ListAttachmentCandidates(ctx context.Context, creatorID int64
 	}
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT id, creator_id, filename, external_link, type, size, storage_type, storage_key, create_time
+		`SELECT id, creator_id, filename, external_link, type, size, storage_type, storage_key, thumbnail_filename, thumbnail_type, thumbnail_size, thumbnail_storage_type, thumbnail_storage_key, create_time
 		FROM attachments
 		WHERE creator_id = ? AND filename = ? AND type = ? AND size = ?
 		ORDER BY id DESC
@@ -986,7 +1015,7 @@ func (s *SQLStore) GetAttachmentByID(ctx context.Context, id int64) (models.Atta
 	var createTime string
 	err := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, creator_id, filename, external_link, type, size, storage_type, storage_key, create_time
+		`SELECT id, creator_id, filename, external_link, type, size, storage_type, storage_key, thumbnail_filename, thumbnail_type, thumbnail_size, thumbnail_storage_type, thumbnail_storage_key, create_time
 		FROM attachments
 		WHERE id = ?`,
 		id,
@@ -999,6 +1028,11 @@ func (s *SQLStore) GetAttachmentByID(ctx context.Context, id int64) (models.Atta
 		&attachment.Size,
 		&attachment.StorageType,
 		&attachment.StorageKey,
+		&attachment.ThumbnailFilename,
+		&attachment.ThumbnailType,
+		&attachment.ThumbnailSize,
+		&attachment.ThumbnailStorageType,
+		&attachment.ThumbnailStorageKey,
 		&createTime,
 	)
 	if err != nil {
@@ -1014,7 +1048,7 @@ func (s *SQLStore) GetAttachmentByID(ctx context.Context, id int64) (models.Atta
 func (s *SQLStore) ListAttachmentsByCreator(ctx context.Context, creatorID int64) ([]models.Attachment, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT id, creator_id, filename, external_link, type, size, storage_type, storage_key, create_time
+		`SELECT id, creator_id, filename, external_link, type, size, storage_type, storage_key, thumbnail_filename, thumbnail_type, thumbnail_size, thumbnail_storage_type, thumbnail_storage_key, create_time
 		FROM attachments
 		WHERE creator_id = ?
 		ORDER BY id DESC`,
@@ -1094,7 +1128,7 @@ func (s *SQLStore) ListAttachmentsByMemoIDs(ctx context.Context, memoIDs []int64
 	}
 
 	query := fmt.Sprintf(
-		`SELECT ma.memo_id, a.id, a.creator_id, a.filename, a.external_link, a.type, a.size, a.storage_type, a.storage_key, a.create_time
+		`SELECT ma.memo_id, a.id, a.creator_id, a.filename, a.external_link, a.type, a.size, a.storage_type, a.storage_key, a.thumbnail_filename, a.thumbnail_type, a.thumbnail_size, a.thumbnail_storage_type, a.thumbnail_storage_key, a.create_time
 		FROM memo_attachments ma
 		JOIN attachments a ON a.id = ma.attachment_id
 		WHERE ma.memo_id IN (%s)
@@ -1121,6 +1155,11 @@ func (s *SQLStore) ListAttachmentsByMemoIDs(ctx context.Context, memoIDs []int64
 			&attachment.Size,
 			&attachment.StorageType,
 			&attachment.StorageKey,
+			&attachment.ThumbnailFilename,
+			&attachment.ThumbnailType,
+			&attachment.ThumbnailSize,
+			&attachment.ThumbnailStorageType,
+			&attachment.ThumbnailStorageKey,
 			&createTime,
 		); err != nil {
 			return nil, err
@@ -1224,6 +1263,11 @@ func scanAttachment(scanner interface {
 		&attachment.Size,
 		&attachment.StorageType,
 		&attachment.StorageKey,
+		&attachment.ThumbnailFilename,
+		&attachment.ThumbnailType,
+		&attachment.ThumbnailSize,
+		&attachment.ThumbnailStorageType,
+		&attachment.ThumbnailStorageKey,
 		&createTime,
 	); err != nil {
 		return models.Attachment{}, err

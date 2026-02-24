@@ -55,6 +55,11 @@ func Migrate(db *sql.DB) error {
 			content_hash TEXT NOT NULL,
 			storage_type TEXT NOT NULL,
 			storage_key TEXT NOT NULL,
+			thumbnail_filename TEXT NOT NULL DEFAULT '',
+			thumbnail_type TEXT NOT NULL DEFAULT '',
+			thumbnail_size INTEGER NOT NULL DEFAULT 0,
+			thumbnail_storage_type TEXT NOT NULL DEFAULT '',
+			thumbnail_storage_key TEXT NOT NULL DEFAULT '',
 			create_time TEXT NOT NULL,
 			FOREIGN KEY(creator_id) REFERENCES users(id) ON DELETE CASCADE
 		);`,

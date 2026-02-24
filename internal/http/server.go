@@ -493,6 +493,50 @@ func NewRouter(cfg config.Config, userService *service.UserService, memoService 
 		return c.SendStatus(fiber.StatusNoContent)
 	})
 
+	app.Get("/file/attachments/:id/thumbnail/:filename", AuthMiddleware(userService), func(c *fiber.Ctx) error {
+		currentUser := CurrentUser(c)
+		attachmentID, err := parseID(c.Params("id"))
+		if err != nil {
+			return badRequest(c, "invalid attachment id")
+		}
+
+		attachment, err := attachmentService.GetAttachment(c.Context(), attachmentID)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return notFound(c, "attachment not found")
+			}
+			return internalError(c, err)
+		}
+
+		if attachment.CreatorID != currentUser.ID {
+			return c.SendStatus(fiber.StatusForbidden)
+		}
+		if strings.TrimSpace(attachment.ThumbnailStorageKey) == "" {
+			return notFound(c, "thumbnail not found")
+		}
+
+		thumbnailStream, err := attachmentService.OpenAttachmentThumbnailStream(c.Context(), attachment)
+		if err != nil {
+			return notFound(c, "thumbnail not found")
+		}
+
+		thumbnailType := strings.TrimSpace(attachment.ThumbnailType)
+		if thumbnailType == "" {
+			thumbnailType = "image/jpeg"
+		}
+		thumbnailFilename := strings.TrimSpace(attachment.ThumbnailFilename)
+		if thumbnailFilename == "" {
+			thumbnailFilename = attachment.Filename
+		}
+		c.Set(fiber.HeaderContentType, thumbnailType)
+		c.Set(fiber.HeaderContentDisposition, inlineContentDisposition(thumbnailFilename))
+		if attachment.ThumbnailSize > 0 {
+			c.Set(fiber.HeaderContentLength, models.Int64ToString(attachment.ThumbnailSize))
+			return c.SendStream(thumbnailStream, int(attachment.ThumbnailSize))
+		}
+		return c.SendStream(thumbnailStream)
+	})
+
 	app.Get("/file/attachments/:id/:filename", AuthMiddleware(userService), func(c *fiber.Ctx) error {
 		currentUser := CurrentUser(c)
 		attachmentID, err := parseID(c.Params("id"))
@@ -625,14 +669,21 @@ func toAPIMemo(memo service.MemoWithAttachments) apiMemo {
 }
 
 func toAPIAttachment(attachment models.Attachment, memoName string) apiAttachment {
+	thumbnailName := ""
+	if strings.TrimSpace(attachment.ThumbnailStorageKey) != "" {
+		thumbnailName = "attachments/" + models.Int64ToString(attachment.ID) + "/thumbnail"
+	}
 	return apiAttachment{
-		Name:         "attachments/" + models.Int64ToString(attachment.ID),
-		CreateTime:   formatTime(attachment.CreateTime),
-		Filename:     attachment.Filename,
-		ExternalLink: attachment.ExternalLink,
-		Type:         attachment.Type,
-		Size:         models.Int64ToString(attachment.Size),
-		Memo:         memoName,
+		Name:              "attachments/" + models.Int64ToString(attachment.ID),
+		CreateTime:        formatTime(attachment.CreateTime),
+		Filename:          attachment.Filename,
+		ExternalLink:      attachment.ExternalLink,
+		Type:              attachment.Type,
+		Size:              models.Int64ToString(attachment.Size),
+		ThumbnailName:     thumbnailName,
+		ThumbnailFilename: attachment.ThumbnailFilename,
+		ThumbnailType:     attachment.ThumbnailType,
+		Memo:              memoName,
 	}
 }
 

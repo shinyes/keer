@@ -142,6 +142,14 @@ func (s *AttachmentService) CreateAttachment(ctx context.Context, userID int64, 
 		}
 		return models.Attachment{}, err
 	}
+	if found {
+		s.copyThumbnailMetadataFromExisting(ctx, attachment.ID, existing)
+	} else {
+		s.ensureThumbnailFromBytes(ctx, attachment, contentType, filename, data)
+	}
+	if refreshed, refreshErr := s.store.GetAttachmentByID(ctx, attachment.ID); refreshErr == nil {
+		attachment = refreshed
+	}
 
 	if memoID != nil {
 		if err := s.attachToMemo(ctx, *memoID, attachment.ID); err != nil {
@@ -316,6 +324,7 @@ func (s *AttachmentService) CompleteAttachmentUploadSession(ctx context.Context,
 		if err != nil {
 			return models.Attachment{}, err
 		}
+		s.copyThumbnailMetadataFromExisting(ctx, attachment.ID, existing)
 	} else {
 		storageKey, err := s.newAttachmentStorageKey(ctx, userID, session.Filename)
 		if err != nil {
@@ -345,6 +354,10 @@ func (s *AttachmentService) CompleteAttachmentUploadSession(ctx context.Context,
 			_ = s.storage.Delete(ctx, storageKey)
 			return models.Attachment{}, err
 		}
+		s.ensureThumbnailFromFile(ctx, attachment, session.Type, session.Filename, session.TempPath)
+	}
+	if refreshed, refreshErr := s.store.GetAttachmentByID(ctx, attachment.ID); refreshErr == nil {
+		attachment = refreshed
 	}
 
 	if session.MemoName != nil {
@@ -385,6 +398,9 @@ func (s *AttachmentService) DeleteAttachment(ctx context.Context, userID int64, 
 		if err := s.storage.Delete(ctx, attachment.StorageKey); err != nil {
 			return err
 		}
+		if attachment.ThumbnailStorageKey != "" {
+			_ = s.storage.Delete(ctx, attachment.ThumbnailStorageKey)
+		}
 	}
 	return s.store.DeleteAttachment(ctx, attachmentID)
 }
@@ -399,6 +415,13 @@ func (s *AttachmentService) OpenAttachmentStream(ctx context.Context, attachment
 
 func (s *AttachmentService) OpenAttachmentRangeStream(ctx context.Context, attachment models.Attachment, start int64, end int64) (io.ReadCloser, error) {
 	return s.storage.OpenRange(ctx, attachment.StorageKey, start, end)
+}
+
+func (s *AttachmentService) OpenAttachmentThumbnailStream(ctx context.Context, attachment models.Attachment) (io.ReadCloser, error) {
+	if strings.TrimSpace(attachment.ThumbnailStorageKey) == "" {
+		return nil, os.ErrNotExist
+	}
+	return s.storage.Open(ctx, attachment.ThumbnailStorageKey)
 }
 
 func (s *AttachmentService) OpenAttachment(ctx context.Context, attachmentID int64) (models.Attachment, io.ReadCloser, error) {

@@ -1,8 +1,12 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
+	"image"
+	"image/color"
+	"image/jpeg"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -205,4 +209,77 @@ func TestDeleteAttachment_KeepFileWhenSharedStorageKey(t *testing.T) {
 	if len(list) != 1 {
 		t.Fatalf("expected one remaining attachment record, got %d", len(list))
 	}
+}
+
+func TestCreateAttachment_GeneratesThumbnailForImage(t *testing.T) {
+	services := setupTestServices(t)
+	localStore, err := storage.NewLocalStore(filepath.Join(t.TempDir(), "uploads"))
+	if err != nil {
+		t.Fatalf("NewLocalStore() error = %v", err)
+	}
+	attachmentService := NewAttachmentService(services.store, localStore)
+	user := mustCreateUser(t, services.store, "attach-thumbnail-image")
+
+	content := base64.StdEncoding.EncodeToString(generateTestJPEGBytes(t, 1200, 900))
+	attachment, err := attachmentService.CreateAttachment(context.Background(), user.ID, CreateAttachmentInput{
+		Filename: "large.jpg",
+		Type:     "image/jpeg",
+		Content:  content,
+	})
+	if err != nil {
+		t.Fatalf("CreateAttachment() error = %v", err)
+	}
+	if attachment.ThumbnailStorageKey == "" {
+		t.Fatalf("expected thumbnail storage key to be populated")
+	}
+
+	thumbnailReader, err := localStore.Open(context.Background(), attachment.ThumbnailStorageKey)
+	if err != nil {
+		t.Fatalf("expected thumbnail to exist, open error = %v", err)
+	}
+	_ = thumbnailReader.Close()
+}
+
+func TestCreateAttachment_DoesNotGenerateThumbnailForNonImage(t *testing.T) {
+	services := setupTestServices(t)
+	localStore, err := storage.NewLocalStore(filepath.Join(t.TempDir(), "uploads"))
+	if err != nil {
+		t.Fatalf("NewLocalStore() error = %v", err)
+	}
+	attachmentService := NewAttachmentService(services.store, localStore)
+	user := mustCreateUser(t, services.store, "attach-thumbnail-text")
+
+	content := base64.StdEncoding.EncodeToString([]byte("plain text data"))
+	attachment, err := attachmentService.CreateAttachment(context.Background(), user.ID, CreateAttachmentInput{
+		Filename: "notes.txt",
+		Type:     "text/plain",
+		Content:  content,
+	})
+	if err != nil {
+		t.Fatalf("CreateAttachment() error = %v", err)
+	}
+	if attachment.ThumbnailStorageKey != "" {
+		t.Fatalf("unexpected thumbnail exists for non-image attachment")
+	}
+}
+
+func generateTestJPEGBytes(t *testing.T, width int, height int) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			img.Set(x, y, color.RGBA{
+				R: uint8(x % 256),
+				G: uint8(y % 256),
+				B: uint8((x + y) % 256),
+				A: 255,
+			})
+		}
+	}
+
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 90}); err != nil {
+		t.Fatalf("jpeg.Encode() error = %v", err)
+	}
+	return buf.Bytes()
 }

@@ -77,15 +77,20 @@ type Memo struct {
 }
 
 type Attachment struct {
-	ID           int64
-	CreatorID    int64
-	Filename     string
-	ExternalLink string
-	Type         string
-	Size         int64
-	StorageType  string
-	StorageKey   string
-	CreateTime   time.Time
+	ID                   int64
+	CreatorID            int64
+	Filename             string
+	ExternalLink         string
+	Type                 string
+	Size                 int64
+	StorageType          string
+	StorageKey           string
+	ThumbnailFilename    string
+	ThumbnailType        string
+	ThumbnailSize        int64
+	ThumbnailStorageType string
+	ThumbnailStorageKey  string
+	CreateTime           time.Time
 }
 
 type AttachmentUploadSession struct {

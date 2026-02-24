@@ -112,13 +112,16 @@ type listAttachmentsResponse struct {
 }
 
 type apiAttachment struct {
-	Name         string `json:"name"`
-	CreateTime   string `json:"createTime,omitempty"`
-	Filename     string `json:"filename,omitempty"`
-	ExternalLink string `json:"externalLink,omitempty"`
-	Type         string `json:"type,omitempty"`
-	Size         string `json:"size,omitempty"`
-	Memo         string `json:"memo,omitempty"`
+	Name              string `json:"name"`
+	CreateTime        string `json:"createTime,omitempty"`
+	Filename          string `json:"filename,omitempty"`
+	ExternalLink      string `json:"externalLink,omitempty"`
+	Type              string `json:"type,omitempty"`
+	Size              string `json:"size,omitempty"`
+	ThumbnailName     string `json:"thumbnailName,omitempty"`
+	ThumbnailFilename string `json:"thumbnailFilename,omitempty"`
+	ThumbnailType     string `json:"thumbnailType,omitempty"`
+	Memo              string `json:"memo,omitempty"`
 }
 
 type userSettingResponse struct {
