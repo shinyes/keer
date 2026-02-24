@@ -8,6 +8,7 @@ import (
 	"mime"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
@@ -25,6 +26,7 @@ func NewRouter(cfg config.Config, userService *service.UserService, memoService 
 	app := fiber.New(fiber.Config{
 		BodyLimit: bodyLimit,
 	})
+	app.Use(httpAccessLogMiddleware())
 	app.Use(cors.New())
 
 	app.Get("/api/v1/instance/profile", func(c *fiber.Ctx) error {
@@ -545,6 +547,33 @@ func NewRouter(cfg config.Config, userService *service.UserService, memoService 
 	})
 
 	return app
+}
+
+func httpAccessLogMiddleware() fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		startedAt := time.Now()
+		err := c.Next()
+
+		status := c.Response().StatusCode()
+		if err != nil {
+			var fiberErr *fiber.Error
+			if errors.As(err, &fiberErr) {
+				status = fiberErr.Code
+			} else if status < fiber.StatusBadRequest {
+				status = fiber.StatusInternalServerError
+			}
+		}
+		if status == 0 {
+			status = fiber.StatusOK
+		}
+
+		path := strings.TrimSpace(c.OriginalURL())
+		if path == "" {
+			path = c.Path()
+		}
+		log.Printf("http request method=%s path=%s status=%d duration=%s ip=%s", c.Method(), path, status, time.Since(startedAt).Round(time.Millisecond), c.IP())
+		return err
+	}
 }
 
 func toAPIUser(user models.User) apiUser {

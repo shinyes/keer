@@ -1,8 +1,11 @@
 package http
 
 import (
+	"bytes"
 	"io"
+	"log"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gofiber/fiber/v2"
@@ -140,5 +143,41 @@ func TestParseSingleByteRange(t *testing.T) {
 				t.Fatalf("range = %d-%d, want %d-%d", start, end, tt.wantStart, tt.wantEnd)
 			}
 		})
+	}
+}
+
+func TestHTTPAccessLogMiddleware(t *testing.T) {
+	var logBuffer bytes.Buffer
+	previousWriter := log.Writer()
+	previousFlags := log.Flags()
+	log.SetOutput(&logBuffer)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(previousWriter)
+		log.SetFlags(previousFlags)
+	})
+
+	app := fiber.New()
+	app.Use(httpAccessLogMiddleware())
+	app.Get("/api/v1/ping", func(c *fiber.Ctx) error {
+		return c.SendString("pong")
+	})
+
+	req := httptest.NewRequest("GET", "/api/v1/ping?echo=1", nil)
+	resp, err := app.Test(req, 5000)
+	if err != nil {
+		t.Fatalf("app.Test() error = %v", err)
+	}
+	defer resp.Body.Close()
+
+	logLine := logBuffer.String()
+	if !strings.Contains(logLine, "method=GET") {
+		t.Fatalf("log missing method, got %q", logLine)
+	}
+	if !strings.Contains(logLine, "path=/api/v1/ping?echo=1") {
+		t.Fatalf("log missing path, got %q", logLine)
+	}
+	if !strings.Contains(logLine, "status=200") {
+		t.Fatalf("log missing status, got %q", logLine)
 	}
 }
