@@ -91,6 +91,22 @@ type createAttachmentRequest struct {
 	Memo     *string `json:"memo"`
 }
 
+type createAttachmentUploadSessionRequest struct {
+	Filename string  `json:"filename"`
+	Type     string  `json:"type"`
+	Size     int64   `json:"size"`
+	Memo     *string `json:"memo"`
+}
+
+type attachmentUploadSessionResponse struct {
+	UploadID     string  `json:"uploadId"`
+	Filename     string  `json:"filename"`
+	Type         string  `json:"type"`
+	Size         string  `json:"size"`
+	UploadedSize string  `json:"uploadedSize"`
+	Memo         *string `json:"memo,omitempty"`
+}
+
 type listAttachmentsResponse struct {
 	Attachments []apiAttachment `json:"attachments"`
 }

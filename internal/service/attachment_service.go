@@ -7,11 +7,14 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/shinyes/keer/internal/models"
 	"github.com/shinyes/keer/internal/storage"
@@ -21,6 +24,7 @@ import (
 type AttachmentService struct {
 	store   *store.SQLStore
 	storage storage.Store
+	tempDir string
 }
 
 const (
@@ -30,9 +34,11 @@ const (
 )
 
 func NewAttachmentService(s *store.SQLStore, fileStorage storage.Store) *AttachmentService {
+	tempDir := filepath.Join(os.TempDir(), "keer", "upload_sessions")
 	return &AttachmentService{
 		store:   s,
 		storage: fileStorage,
+		tempDir: tempDir,
 	}
 }
 
@@ -41,6 +47,28 @@ type CreateAttachmentInput struct {
 	Type     string
 	Content  string
 	MemoName *string
+}
+
+type CreateAttachmentUploadSessionInput struct {
+	Filename string
+	Type     string
+	Size     int64
+	MemoName *string
+}
+
+var (
+	ErrUploadSessionNotFound  = errors.New("upload session not found")
+	ErrUploadOffsetMismatch   = errors.New("upload offset mismatch")
+	ErrUploadExceedsTotalSize = errors.New("upload exceeds total size")
+	ErrUploadNotComplete      = errors.New("upload not complete")
+)
+
+type UploadOffsetMismatchError struct {
+	CurrentOffset int64
+}
+
+func (e *UploadOffsetMismatchError) Error() string {
+	return fmt.Sprintf("upload offset mismatch current=%d", e.CurrentOffset)
 }
 
 func (s *AttachmentService) CreateAttachment(ctx context.Context, userID int64, input CreateAttachmentInput) (models.Attachment, error) {
@@ -121,6 +149,218 @@ func (s *AttachmentService) CreateAttachment(ctx context.Context, userID int64, 
 		}
 	}
 
+	return attachment, nil
+}
+
+func (s *AttachmentService) CreateAttachmentUploadSession(ctx context.Context, userID int64, input CreateAttachmentUploadSessionInput) (models.AttachmentUploadSession, error) {
+	filename := sanitizeFilename(input.Filename)
+	if filename == "" {
+		return models.AttachmentUploadSession{}, fmt.Errorf("filename cannot be empty")
+	}
+	contentType := strings.TrimSpace(input.Type)
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	if input.Size <= 0 {
+		return models.AttachmentUploadSession{}, fmt.Errorf("size must be positive")
+	}
+
+	var memoName *string
+	if input.MemoName != nil {
+		trimmed := strings.TrimSpace(*input.MemoName)
+		if trimmed != "" {
+			id, err := parseMemoID(trimmed)
+			if err != nil {
+				return models.AttachmentUploadSession{}, err
+			}
+			if _, err := s.store.GetMemoByIDAndCreator(ctx, id, userID); err != nil {
+				return models.AttachmentUploadSession{}, err
+			}
+			memoName = &trimmed
+		}
+	}
+
+	if err := os.MkdirAll(s.tempDir, 0o755); err != nil {
+		return models.AttachmentUploadSession{}, fmt.Errorf("create upload temp dir: %w", err)
+	}
+	uploadID, err := generateNanoID(24)
+	if err != nil {
+		return models.AttachmentUploadSession{}, err
+	}
+	tempPath := filepath.Join(s.tempDir, uploadID+".part")
+	tempFile, err := os.OpenFile(tempPath, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0o644)
+	if err != nil {
+		return models.AttachmentUploadSession{}, fmt.Errorf("create upload temp file: %w", err)
+	}
+	_ = tempFile.Close()
+
+	now := time.Now().UTC()
+	session, err := s.store.CreateAttachmentUploadSession(ctx, models.AttachmentUploadSession{
+		ID:           uploadID,
+		CreatorID:    userID,
+		Filename:     filename,
+		Type:         contentType,
+		Size:         input.Size,
+		MemoName:     memoName,
+		TempPath:     tempPath,
+		ReceivedSize: 0,
+		CreateTime:   now,
+		UpdateTime:   now,
+	})
+	if err != nil {
+		_ = os.Remove(tempPath)
+		return models.AttachmentUploadSession{}, err
+	}
+	return session, nil
+}
+
+func (s *AttachmentService) GetAttachmentUploadSession(ctx context.Context, userID int64, uploadID string) (models.AttachmentUploadSession, error) {
+	session, err := s.store.GetAttachmentUploadSessionByID(ctx, strings.TrimSpace(uploadID))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return models.AttachmentUploadSession{}, ErrUploadSessionNotFound
+		}
+		return models.AttachmentUploadSession{}, err
+	}
+	if session.CreatorID != userID {
+		return models.AttachmentUploadSession{}, sql.ErrNoRows
+	}
+	return session, nil
+}
+
+func (s *AttachmentService) AppendAttachmentUploadChunk(ctx context.Context, userID int64, uploadID string, expectedOffset int64, chunk []byte) (models.AttachmentUploadSession, error) {
+	session, err := s.GetAttachmentUploadSession(ctx, userID, uploadID)
+	if err != nil {
+		return models.AttachmentUploadSession{}, err
+	}
+	if expectedOffset != session.ReceivedSize {
+		return models.AttachmentUploadSession{}, &UploadOffsetMismatchError{CurrentOffset: session.ReceivedSize}
+	}
+
+	remaining := session.Size - session.ReceivedSize
+	if int64(len(chunk)) > remaining {
+		return models.AttachmentUploadSession{}, ErrUploadExceedsTotalSize
+	}
+
+	file, err := os.OpenFile(session.TempPath, os.O_WRONLY, 0o644)
+	if err != nil {
+		return models.AttachmentUploadSession{}, fmt.Errorf("open upload temp file: %w", err)
+	}
+	defer file.Close()
+
+	if _, err := file.Seek(session.ReceivedSize, io.SeekStart); err != nil {
+		return models.AttachmentUploadSession{}, fmt.Errorf("seek upload temp file: %w", err)
+	}
+	if _, err := file.Write(chunk); err != nil {
+		return models.AttachmentUploadSession{}, fmt.Errorf("write upload chunk: %w", err)
+	}
+
+	newOffset := session.ReceivedSize + int64(len(chunk))
+	if err := s.store.UpdateAttachmentUploadSessionOffset(ctx, session.ID, session.ReceivedSize, newOffset); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			latest, latestErr := s.store.GetAttachmentUploadSessionByID(ctx, session.ID)
+			if latestErr != nil {
+				return models.AttachmentUploadSession{}, latestErr
+			}
+			return models.AttachmentUploadSession{}, &UploadOffsetMismatchError{CurrentOffset: latest.ReceivedSize}
+		}
+		return models.AttachmentUploadSession{}, err
+	}
+	return s.store.GetAttachmentUploadSessionByID(ctx, session.ID)
+}
+
+func (s *AttachmentService) CancelAttachmentUploadSession(ctx context.Context, userID int64, uploadID string) error {
+	session, err := s.GetAttachmentUploadSession(ctx, userID, uploadID)
+	if err != nil {
+		return err
+	}
+	if err := s.store.DeleteAttachmentUploadSessionByID(ctx, session.ID); err != nil {
+		return err
+	}
+	_ = os.Remove(session.TempPath)
+	return nil
+}
+
+func (s *AttachmentService) CompleteAttachmentUploadSession(ctx context.Context, userID int64, uploadID string) (models.Attachment, error) {
+	session, err := s.GetAttachmentUploadSession(ctx, userID, uploadID)
+	if err != nil {
+		return models.Attachment{}, err
+	}
+	if session.ReceivedSize != session.Size {
+		return models.Attachment{}, ErrUploadNotComplete
+	}
+
+	contentHash, err := hashFileSHA256(session.TempPath)
+	if err != nil {
+		return models.Attachment{}, err
+	}
+
+	existing, found, err := s.store.FindAttachmentByContentHash(ctx, userID, contentHash)
+	if err != nil {
+		return models.Attachment{}, err
+	}
+
+	var attachment models.Attachment
+	if found {
+		attachment, err = s.store.CreateAttachment(
+			ctx,
+			userID,
+			session.Filename,
+			"",
+			session.Type,
+			existing.Size,
+			contentHash,
+			existing.StorageType,
+			existing.StorageKey,
+		)
+		if err != nil {
+			return models.Attachment{}, err
+		}
+	} else {
+		storageKey, err := s.newAttachmentStorageKey(ctx, userID, session.Filename)
+		if err != nil {
+			return models.Attachment{}, err
+		}
+		file, err := os.Open(session.TempPath)
+		if err != nil {
+			return models.Attachment{}, fmt.Errorf("open upload temp file: %w", err)
+		}
+		size, uploadErr := s.storage.PutStream(ctx, storageKey, session.Type, file, session.Size)
+		_ = file.Close()
+		if uploadErr != nil {
+			return models.Attachment{}, uploadErr
+		}
+		attachment, err = s.store.CreateAttachment(
+			ctx,
+			userID,
+			session.Filename,
+			"",
+			session.Type,
+			size,
+			contentHash,
+			storageTypeName(s.storage),
+			storageKey,
+		)
+		if err != nil {
+			_ = s.storage.Delete(ctx, storageKey)
+			return models.Attachment{}, err
+		}
+	}
+
+	if session.MemoName != nil {
+		memoID, err := parseMemoID(*session.MemoName)
+		if err != nil {
+			return models.Attachment{}, err
+		}
+		if err := s.attachToMemo(ctx, memoID, attachment.ID); err != nil {
+			return models.Attachment{}, err
+		}
+	}
+
+	if err := s.store.DeleteAttachmentUploadSessionByID(ctx, session.ID); err != nil {
+		return models.Attachment{}, err
+	}
+	_ = os.Remove(session.TempPath)
 	return attachment, nil
 }
 
@@ -294,4 +534,18 @@ func storageTypeName(s storage.Store) string {
 	default:
 		return "LOCAL"
 	}
+}
+
+func hashFileSHA256(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("open upload temp file for hash: %w", err)
+	}
+	defer f.Close()
+
+	hasher := sha256.New()
+	if _, err := io.Copy(hasher, f); err != nil {
+		return "", fmt.Errorf("hash upload temp file: %w", err)
+	}
+	return hex.EncodeToString(hasher.Sum(nil)), nil
 }

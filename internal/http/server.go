@@ -346,6 +346,136 @@ func NewRouter(cfg config.Config, userService *service.UserService, memoService 
 		return c.JSON(toAPIAttachment(attachment, ""))
 	})
 
+	api.Post("/attachments/uploads", func(c *fiber.Ctx) error {
+		currentUser := CurrentUser(c)
+		var req createAttachmentUploadSessionRequest
+		if err := c.BodyParser(&req); err != nil {
+			return badRequest(c, "invalid request body")
+		}
+
+		session, err := attachmentService.CreateAttachmentUploadSession(
+			c.Context(),
+			currentUser.ID,
+			service.CreateAttachmentUploadSessionInput{
+				Filename: req.Filename,
+				Type:     req.Type,
+				Size:     req.Size,
+				MemoName: req.Memo,
+			},
+		)
+		if err != nil {
+			return badRequest(c, err.Error())
+		}
+
+		c.Set("Upload-Offset", models.Int64ToString(session.ReceivedSize))
+		c.Set("Upload-Length", models.Int64ToString(session.Size))
+		c.Set("Upload-Id", session.ID)
+		return c.Status(fiber.StatusCreated).JSON(toAttachmentUploadSessionResponse(session))
+	})
+
+	api.Head("/attachments/uploads/:id", func(c *fiber.Ctx) error {
+		currentUser := CurrentUser(c)
+		uploadID := strings.TrimSpace(c.Params("id"))
+		if uploadID == "" {
+			return badRequest(c, "invalid upload id")
+		}
+
+		session, err := attachmentService.GetAttachmentUploadSession(c.Context(), currentUser.ID, uploadID)
+		if err != nil {
+			if errors.Is(err, service.ErrUploadSessionNotFound) || errors.Is(err, sql.ErrNoRows) {
+				return notFound(c, "upload session not found")
+			}
+			return internalError(c, err)
+		}
+		c.Set("Upload-Offset", models.Int64ToString(session.ReceivedSize))
+		c.Set("Upload-Length", models.Int64ToString(session.Size))
+		c.Set("Upload-Id", session.ID)
+		return c.SendStatus(fiber.StatusNoContent)
+	})
+
+	api.Patch("/attachments/uploads/:id", func(c *fiber.Ctx) error {
+		currentUser := CurrentUser(c)
+		uploadID := strings.TrimSpace(c.Params("id"))
+		if uploadID == "" {
+			return badRequest(c, "invalid upload id")
+		}
+
+		expectedOffset, err := parseNonNegativeInt64(c.Get("Upload-Offset"))
+		if err != nil {
+			return badRequest(c, "invalid Upload-Offset header")
+		}
+		chunk := c.Body()
+
+		session, err := attachmentService.AppendAttachmentUploadChunk(
+			c.Context(),
+			currentUser.ID,
+			uploadID,
+			expectedOffset,
+			chunk,
+		)
+		if err != nil {
+			var mismatch *service.UploadOffsetMismatchError
+			if errors.As(err, &mismatch) {
+				c.Set("Upload-Offset", models.Int64ToString(mismatch.CurrentOffset))
+				return c.Status(fiber.StatusConflict).JSON(fiber.Map{
+					"message":       "upload offset mismatch",
+					"currentOffset": models.Int64ToString(mismatch.CurrentOffset),
+				})
+			}
+			if errors.Is(err, service.ErrUploadSessionNotFound) || errors.Is(err, sql.ErrNoRows) {
+				return notFound(c, "upload session not found")
+			}
+			if errors.Is(err, service.ErrUploadExceedsTotalSize) {
+				return badRequest(c, err.Error())
+			}
+			return internalError(c, err)
+		}
+
+		c.Set("Upload-Offset", models.Int64ToString(session.ReceivedSize))
+		c.Set("Upload-Length", models.Int64ToString(session.Size))
+		c.Set("Upload-Id", session.ID)
+		return c.SendStatus(fiber.StatusNoContent)
+	})
+
+	api.Post("/attachments/uploads/:id/complete", func(c *fiber.Ctx) error {
+		currentUser := CurrentUser(c)
+		uploadID := strings.TrimSpace(c.Params("id"))
+		if uploadID == "" {
+			return badRequest(c, "invalid upload id")
+		}
+
+		attachment, err := attachmentService.CompleteAttachmentUploadSession(c.Context(), currentUser.ID, uploadID)
+		if err != nil {
+			if errors.Is(err, service.ErrUploadSessionNotFound) || errors.Is(err, sql.ErrNoRows) {
+				return notFound(c, "upload session not found")
+			}
+			if errors.Is(err, service.ErrUploadNotComplete) {
+				return c.Status(fiber.StatusConflict).JSON(fiber.Map{
+					"message": "upload not complete",
+				})
+			}
+			return internalError(c, err)
+		}
+		return c.JSON(toAPIAttachment(attachment, ""))
+	})
+
+	api.Delete("/attachments/uploads/:id", func(c *fiber.Ctx) error {
+		currentUser := CurrentUser(c)
+		uploadID := strings.TrimSpace(c.Params("id"))
+		if uploadID == "" {
+			return badRequest(c, "invalid upload id")
+		}
+
+		err := attachmentService.CancelAttachmentUploadSession(c.Context(), currentUser.ID, uploadID)
+		if err != nil {
+			if errors.Is(err, service.ErrUploadSessionNotFound) || errors.Is(err, sql.ErrNoRows) {
+				return notFound(c, "upload session not found")
+			}
+			return internalError(c, err)
+		}
+		return c.SendStatus(fiber.StatusNoContent)
+	})
+
 	api.Delete("/attachments/:id", func(c *fiber.Ctx) error {
 		currentUser := CurrentUser(c)
 		attachmentID, err := parseID(c.Params("id"))
@@ -477,12 +607,35 @@ func toAPIAttachment(attachment models.Attachment, memoName string) apiAttachmen
 	}
 }
 
+func toAttachmentUploadSessionResponse(session models.AttachmentUploadSession) attachmentUploadSessionResponse {
+	return attachmentUploadSessionResponse{
+		UploadID:     session.ID,
+		Filename:     session.Filename,
+		Type:         session.Type,
+		Size:         models.Int64ToString(session.Size),
+		UploadedSize: models.Int64ToString(session.ReceivedSize),
+		Memo:         session.MemoName,
+	}
+}
+
 func parseID(raw string) (int64, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return 0, fmt.Errorf("empty id")
 	}
 	return strconv.ParseInt(raw, 10, 64)
+}
+
+func parseNonNegativeInt64(raw string) (int64, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, fmt.Errorf("empty integer")
+	}
+	v, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || v < 0 {
+		return 0, fmt.Errorf("invalid integer")
+	}
+	return v, nil
 }
 
 func parseSingleByteRange(raw string, size int64) (start int64, end int64, hasRange bool, err error) {

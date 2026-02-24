@@ -43,16 +43,31 @@ func NewS3Store(ctx context.Context, cfg config.S3Config) (*S3Store, error) {
 }
 
 func (s *S3Store) Put(ctx context.Context, key string, contentType string, data []byte) (int64, error) {
-	_, err := s.client.PutObject(ctx, &s3.PutObjectInput{
+	return s.PutStream(ctx, key, contentType, bytes.NewReader(data), int64(len(data)))
+}
+
+func (s *S3Store) PutStream(ctx context.Context, key string, contentType string, reader io.Reader, size int64) (int64, error) {
+	input := &s3.PutObjectInput{
 		Bucket:      aws.String(s.bucket),
 		Key:         aws.String(key),
 		ContentType: aws.String(contentType),
-		Body:        bytes.NewReader(data),
+		Body:        reader,
+	}
+	if size >= 0 {
+		input.ContentLength = aws.Int64(size)
+	}
+
+	_, err := s.client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:        input.Bucket,
+		Key:           input.Key,
+		ContentType:   input.ContentType,
+		Body:          input.Body,
+		ContentLength: input.ContentLength,
 	})
 	if err != nil {
 		return 0, fmt.Errorf("put s3 object: %w", err)
 	}
-	return int64(len(data)), nil
+	return size, nil
 }
 
 func (s *S3Store) Open(ctx context.Context, key string) (io.ReadCloser, error) {

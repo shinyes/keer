@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -21,6 +22,10 @@ func NewLocalStore(baseDir string) (*LocalStore, error) {
 }
 
 func (s *LocalStore) Put(_ context.Context, key string, _ string, data []byte) (int64, error) {
+	return s.PutStream(context.Background(), key, "", bytes.NewReader(data), int64(len(data)))
+}
+
+func (s *LocalStore) PutStream(_ context.Context, key string, _ string, reader io.Reader, size int64) (int64, error) {
 	path, err := s.pathFor(key)
 	if err != nil {
 		return 0, err
@@ -28,10 +33,20 @@ func (s *LocalStore) Put(_ context.Context, key string, _ string, data []byte) (
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return 0, fmt.Errorf("create upload parent: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	f, err := os.Create(path)
+	if err != nil {
+		return 0, fmt.Errorf("create upload file: %w", err)
+	}
+	defer f.Close()
+
+	written, err := io.Copy(f, reader)
+	if err != nil {
 		return 0, fmt.Errorf("write upload file: %w", err)
 	}
-	return int64(len(data)), nil
+	if size >= 0 && written != size {
+		return 0, fmt.Errorf("write upload file: size mismatch expected=%d actual=%d", size, written)
+	}
+	return written, nil
 }
 
 func (s *LocalStore) Open(_ context.Context, key string) (io.ReadCloser, error) {

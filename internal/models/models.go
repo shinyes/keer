@@ -88,6 +88,19 @@ type Attachment struct {
 	CreateTime   time.Time
 }
 
+type AttachmentUploadSession struct {
+	ID           string
+	CreatorID    int64
+	Filename     string
+	Type         string
+	Size         int64
+	MemoName     *string
+	TempPath     string
+	ReceivedSize int64
+	CreateTime   time.Time
+	UpdateTime   time.Time
+}
+
 func (m Memo) Name() string {
 	return "memos/" + Int64ToString(m.ID)
 }

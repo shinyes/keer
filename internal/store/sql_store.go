@@ -808,6 +808,110 @@ func (s *SQLStore) CreateAttachment(ctx context.Context, creatorID int64, filena
 	return attachment, nil
 }
 
+func (s *SQLStore) CreateAttachmentUploadSession(ctx context.Context, session models.AttachmentUploadSession) (models.AttachmentUploadSession, error) {
+	if session.ID == "" {
+		return models.AttachmentUploadSession{}, fmt.Errorf("upload session id is required")
+	}
+	now := time.Now().UTC()
+	createTime := session.CreateTime
+	if createTime.IsZero() {
+		createTime = now
+	}
+	updateTime := session.UpdateTime
+	if updateTime.IsZero() {
+		updateTime = now
+	}
+
+	_, err := s.db.ExecContext(
+		ctx,
+		`INSERT INTO attachment_upload_sessions (id, creator_id, filename, type, size, memo_name, temp_path, received_size, create_time, update_time)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		session.ID,
+		session.CreatorID,
+		session.Filename,
+		session.Type,
+		session.Size,
+		session.MemoName,
+		session.TempPath,
+		session.ReceivedSize,
+		createTime.Format(time.RFC3339Nano),
+		updateTime.Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return models.AttachmentUploadSession{}, err
+	}
+	return s.GetAttachmentUploadSessionByID(ctx, session.ID)
+}
+
+func (s *SQLStore) GetAttachmentUploadSessionByID(ctx context.Context, id string) (models.AttachmentUploadSession, error) {
+	var session models.AttachmentUploadSession
+	var memoName sql.NullString
+	var createTime string
+	var updateTime string
+	err := s.db.QueryRowContext(
+		ctx,
+		`SELECT id, creator_id, filename, type, size, memo_name, temp_path, received_size, create_time, update_time
+		FROM attachment_upload_sessions
+		WHERE id = ?`,
+		id,
+	).Scan(
+		&session.ID,
+		&session.CreatorID,
+		&session.Filename,
+		&session.Type,
+		&session.Size,
+		&memoName,
+		&session.TempPath,
+		&session.ReceivedSize,
+		&createTime,
+		&updateTime,
+	)
+	if err != nil {
+		return models.AttachmentUploadSession{}, err
+	}
+	if memoName.Valid {
+		session.MemoName = &memoName.String
+	}
+	session.CreateTime, err = parseTime(createTime)
+	if err != nil {
+		return models.AttachmentUploadSession{}, err
+	}
+	session.UpdateTime, err = parseTime(updateTime)
+	if err != nil {
+		return models.AttachmentUploadSession{}, err
+	}
+	return session, nil
+}
+
+func (s *SQLStore) UpdateAttachmentUploadSessionOffset(ctx context.Context, id string, expectedOffset int64, newOffset int64) error {
+	res, err := s.db.ExecContext(
+		ctx,
+		`UPDATE attachment_upload_sessions
+		SET received_size = ?, update_time = ?
+		WHERE id = ? AND received_size = ?`,
+		newOffset,
+		time.Now().UTC().Format(time.RFC3339Nano),
+		id,
+		expectedOffset,
+	)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (s *SQLStore) DeleteAttachmentUploadSessionByID(ctx context.Context, id string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM attachment_upload_sessions WHERE id = ?`, id)
+	return err
+}
+
 func (s *SQLStore) FindAttachmentByContentHash(ctx context.Context, creatorID int64, contentHash string) (models.Attachment, bool, error) {
 	var attachment models.Attachment
 	var createTime string

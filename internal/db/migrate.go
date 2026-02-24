@@ -69,6 +69,21 @@ func Migrate(db *sql.DB) error {
 			FOREIGN KEY(attachment_id) REFERENCES attachments(id) ON DELETE CASCADE
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_memo_attachments_memo ON memo_attachments(memo_id, position);`,
+		`CREATE TABLE IF NOT EXISTS attachment_upload_sessions (
+			id TEXT PRIMARY KEY,
+			creator_id INTEGER NOT NULL,
+			filename TEXT NOT NULL,
+			type TEXT NOT NULL,
+			size INTEGER NOT NULL,
+			memo_name TEXT,
+			temp_path TEXT NOT NULL,
+			received_size INTEGER NOT NULL DEFAULT 0,
+			create_time TEXT NOT NULL,
+			update_time TEXT NOT NULL,
+			FOREIGN KEY(creator_id) REFERENCES users(id) ON DELETE CASCADE
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_attachment_upload_sessions_creator ON attachment_upload_sessions(creator_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_attachment_upload_sessions_update_time ON attachment_upload_sessions(update_time);`,
 		`CREATE TABLE IF NOT EXISTS system_settings (
 			key TEXT PRIMARY KEY,
 			value TEXT NOT NULL,
