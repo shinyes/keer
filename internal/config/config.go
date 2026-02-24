@@ -29,7 +29,7 @@ type Config struct {
 	DBPath            string
 	UploadsDir        string
 	BodyLimitMB       int
-	Version           string
+	KeerAPIVersion    string
 	Storage           StorageBackend
 	S3                S3Config
 	AllowRegistration bool
@@ -44,7 +44,7 @@ func Load() (Config, error) {
 		DBPath:            env("DB_PATH", "./data/keer.db"),
 		UploadsDir:        env("UPLOADS_DIR", "./data/uploads"),
 		BodyLimitMB:       envInt("HTTP_BODY_LIMIT_MB", 64),
-		Version:           env("MEMOS_VERSION", "0.26.1"),
+		KeerAPIVersion:    env("KEER_API_VERSION", "0.1"),
 		Storage:           StorageBackendLocal,
 		AllowRegistration: envBool("ALLOW_REGISTRATION", true),
 		BootstrapUser:     env("BOOTSTRAP_USER", "demo"),

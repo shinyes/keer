@@ -134,7 +134,7 @@ type userStatsResponse struct {
 }
 
 type profileResponse struct {
-	Version string `json:"version"`
+	KeerAPIVersion string `json:"keer_api_version"`
 }
 
 func formatTime(t time.Time) string {

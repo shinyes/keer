@@ -31,7 +31,7 @@ func NewRouter(cfg config.Config, userService *service.UserService, memoService 
 
 	app.Get("/api/v1/instance/profile", func(c *fiber.Ctx) error {
 		return c.JSON(profileResponse{
-			Version: cfg.Version,
+			KeerAPIVersion: cfg.KeerAPIVersion,
 		})
 	})
 

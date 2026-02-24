@@ -312,7 +312,7 @@ func newTestAppWithUserService(t *testing.T, allowRegistration bool, withBootstr
 	attachmentService := service.NewAttachmentService(sqlStore, localStore)
 
 	cfg := config.Config{
-		Version:           "0.26.1",
+		KeerAPIVersion:    "0.1",
 		AllowRegistration: allowRegistration,
 	}
 	return NewRouter(cfg, userService, memoService, attachmentService), userService

@@ -44,7 +44,7 @@ $env:APP_ADDR=":8080"
 $env:BASE_URL="http://localhost:8080"
 $env:DB_PATH="./data/keer.db"
 $env:UPLOADS_DIR="./data/uploads"
-$env:MEMOS_VERSION="0.26.1"
+$env:KEER_API_VERSION="0.1"
 
 # 首次联调用的引导账号与令牌
 $env:BOOTSTRAP_USER="demo"
@@ -82,7 +82,7 @@ storage set-s3 `
 - `DB_PATH`：SQLite 文件路径，默认 `./data/keer.db`
 - `UPLOADS_DIR`：本地附件目录，默认 `./data/uploads`（仅 local 模式使用）
 - `HTTP_BODY_LIMIT_MB`：HTTP 请求体大小上限（MiB），默认 `64`（建议保留默认以兼容较大附件的 Base64 上传）
-- `MEMOS_VERSION`：`/api/v1/instance/profile` 返回版本，默认 `0.26.1`
+- `KEER_API_VERSION`：`/api/v1/instance/profile` 返回 `keer_api_version`，默认 `0.1`
 - `ALLOW_REGISTRATION`：是否允许公开注册，默认 `true`
 - `BOOTSTRAP_USER`：引导用户名，默认 `demo`
 - `BOOTSTRAP_TOKEN`：引导令牌，默认空（为空则不创建引导令牌）
