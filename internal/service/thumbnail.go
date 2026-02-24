@@ -21,6 +21,7 @@ const (
 	thumbnailMaxDimension  = 640
 	thumbnailJPEGQuality   = 80
 	thumbnailMaxSourceSize = 40 * 1024 * 1024
+	thumbnailUploadMaxSize = 8 * 1024 * 1024
 	thumbnailContentType   = "image/jpeg"
 )
 
@@ -169,6 +170,57 @@ func (s *AttachmentService) ensureThumbnailFromFile(
 		attachment.ID,
 		buildThumbnailFilename(filename),
 		thumbnailContentType,
+		thumbnailSize,
+		storageTypeName(s.storage),
+		thumbnailKey,
+	)
+}
+
+func (s *AttachmentService) ensureThumbnailFromUploadSession(
+	ctx context.Context,
+	attachment models.Attachment,
+	contentType string,
+	filename string,
+	path string,
+) {
+	trimmedPath := strings.TrimSpace(path)
+	if trimmedPath == "" {
+		return
+	}
+	stat, err := os.Stat(trimmedPath)
+	if err != nil {
+		return
+	}
+	if stat.Size() <= 0 || stat.Size() > thumbnailUploadMaxSize {
+		return
+	}
+	thumbnailType := strings.TrimSpace(contentType)
+	if thumbnailType == "" {
+		thumbnailType = thumbnailContentType
+	}
+	thumbnailFilename := sanitizeFilename(filename)
+	if thumbnailFilename == "" {
+		thumbnailFilename = buildThumbnailFilename(attachment.Filename)
+	}
+	f, err := os.Open(trimmedPath)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+
+	thumbnailKey := thumbnailStorageKey(attachment.StorageKey)
+	if thumbnailKey == "" {
+		return
+	}
+	thumbnailSize, err := s.storage.PutStream(ctx, thumbnailKey, thumbnailType, f, stat.Size())
+	if err != nil || thumbnailSize <= 0 {
+		return
+	}
+	_ = s.store.UpdateAttachmentThumbnail(
+		ctx,
+		attachment.ID,
+		thumbnailFilename,
+		thumbnailType,
 		thumbnailSize,
 		storageTypeName(s.storage),
 		thumbnailKey,

@@ -92,10 +92,17 @@ type createAttachmentRequest struct {
 }
 
 type createAttachmentUploadSessionRequest struct {
-	Filename string  `json:"filename"`
-	Type     string  `json:"type"`
-	Size     int64   `json:"size"`
-	Memo     *string `json:"memo"`
+	Filename  string                                  `json:"filename"`
+	Type      string                                  `json:"type"`
+	Size      int64                                   `json:"size"`
+	Memo      *string                                 `json:"memo"`
+	Thumbnail *createAttachmentUploadThumbnailRequest `json:"thumbnail"`
+}
+
+type createAttachmentUploadThumbnailRequest struct {
+	Filename string `json:"filename"`
+	Type     string `json:"type"`
+	Content  string `json:"content"`
 }
 
 type attachmentUploadSessionResponse struct {

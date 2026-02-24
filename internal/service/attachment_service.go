@@ -50,10 +50,17 @@ type CreateAttachmentInput struct {
 }
 
 type CreateAttachmentUploadSessionInput struct {
+	Filename  string
+	Type      string
+	Size      int64
+	MemoName  *string
+	Thumbnail *CreateAttachmentUploadSessionThumbnailInput
+}
+
+type CreateAttachmentUploadSessionThumbnailInput struct {
 	Filename string
 	Type     string
-	Size     int64
-	MemoName *string
+	Content  string
 }
 
 var (
@@ -173,6 +180,35 @@ func (s *AttachmentService) CreateAttachmentUploadSession(ctx context.Context, u
 		return models.AttachmentUploadSession{}, fmt.Errorf("size must be positive")
 	}
 
+	thumbnailFilename := ""
+	thumbnailType := ""
+	thumbnailData := []byte(nil)
+	if input.Thumbnail != nil {
+		thumbnailFilename = sanitizeFilename(input.Thumbnail.Filename)
+		if thumbnailFilename == "" {
+			thumbnailFilename = buildThumbnailFilename(filename)
+		}
+		thumbnailType = strings.TrimSpace(input.Thumbnail.Type)
+		if thumbnailType == "" {
+			thumbnailType = thumbnailContentType
+		}
+		thumbnailPayload := strings.TrimSpace(input.Thumbnail.Content)
+		if thumbnailPayload == "" {
+			return models.AttachmentUploadSession{}, fmt.Errorf("thumbnail content cannot be empty")
+		}
+		decoded, err := base64.StdEncoding.DecodeString(thumbnailPayload)
+		if err != nil {
+			return models.AttachmentUploadSession{}, fmt.Errorf("invalid thumbnail base64 content")
+		}
+		if len(decoded) == 0 {
+			return models.AttachmentUploadSession{}, fmt.Errorf("thumbnail content cannot be empty")
+		}
+		if len(decoded) > thumbnailUploadMaxSize {
+			return models.AttachmentUploadSession{}, fmt.Errorf("thumbnail content too large")
+		}
+		thumbnailData = decoded
+	}
+
 	var memoName *string
 	if input.MemoName != nil {
 		trimmed := strings.TrimSpace(*input.MemoName)
@@ -202,21 +238,36 @@ func (s *AttachmentService) CreateAttachmentUploadSession(ctx context.Context, u
 	}
 	_ = tempFile.Close()
 
+	thumbnailTempPath := ""
+	if len(thumbnailData) > 0 {
+		thumbnailTempPath = filepath.Join(s.tempDir, uploadID+".thumb")
+		if err := os.WriteFile(thumbnailTempPath, thumbnailData, 0o644); err != nil {
+			_ = os.Remove(tempPath)
+			return models.AttachmentUploadSession{}, fmt.Errorf("create upload thumbnail temp file: %w", err)
+		}
+	}
+
 	now := time.Now().UTC()
 	session, err := s.store.CreateAttachmentUploadSession(ctx, models.AttachmentUploadSession{
-		ID:           uploadID,
-		CreatorID:    userID,
-		Filename:     filename,
-		Type:         contentType,
-		Size:         input.Size,
-		MemoName:     memoName,
-		TempPath:     tempPath,
-		ReceivedSize: 0,
-		CreateTime:   now,
-		UpdateTime:   now,
+		ID:                uploadID,
+		CreatorID:         userID,
+		Filename:          filename,
+		Type:              contentType,
+		Size:              input.Size,
+		MemoName:          memoName,
+		TempPath:          tempPath,
+		ThumbnailFilename: thumbnailFilename,
+		ThumbnailType:     thumbnailType,
+		ThumbnailTempPath: thumbnailTempPath,
+		ReceivedSize:      0,
+		CreateTime:        now,
+		UpdateTime:        now,
 	})
 	if err != nil {
 		_ = os.Remove(tempPath)
+		if thumbnailTempPath != "" {
+			_ = os.Remove(thumbnailTempPath)
+		}
 		return models.AttachmentUploadSession{}, err
 	}
 	return session, nil
@@ -286,6 +337,9 @@ func (s *AttachmentService) CancelAttachmentUploadSession(ctx context.Context, u
 		return err
 	}
 	_ = os.Remove(session.TempPath)
+	if session.ThumbnailTempPath != "" {
+		_ = os.Remove(session.ThumbnailTempPath)
+	}
 	return nil
 }
 
@@ -324,7 +378,17 @@ func (s *AttachmentService) CompleteAttachmentUploadSession(ctx context.Context,
 		if err != nil {
 			return models.Attachment{}, err
 		}
-		s.copyThumbnailMetadataFromExisting(ctx, attachment.ID, existing)
+		if existing.ThumbnailStorageKey != "" && existing.ThumbnailSize > 0 {
+			s.copyThumbnailMetadataFromExisting(ctx, attachment.ID, existing)
+		} else if session.ThumbnailTempPath != "" {
+			s.ensureThumbnailFromUploadSession(
+				ctx,
+				attachment,
+				session.ThumbnailType,
+				session.ThumbnailFilename,
+				session.ThumbnailTempPath,
+			)
+		}
 	} else {
 		storageKey, err := s.newAttachmentStorageKey(ctx, userID, session.Filename)
 		if err != nil {
@@ -354,7 +418,17 @@ func (s *AttachmentService) CompleteAttachmentUploadSession(ctx context.Context,
 			_ = s.storage.Delete(ctx, storageKey)
 			return models.Attachment{}, err
 		}
-		s.ensureThumbnailFromFile(ctx, attachment, session.Type, session.Filename, session.TempPath)
+		if session.ThumbnailTempPath != "" {
+			s.ensureThumbnailFromUploadSession(
+				ctx,
+				attachment,
+				session.ThumbnailType,
+				session.ThumbnailFilename,
+				session.ThumbnailTempPath,
+			)
+		} else {
+			s.ensureThumbnailFromFile(ctx, attachment, session.Type, session.Filename, session.TempPath)
+		}
 	}
 	if refreshed, refreshErr := s.store.GetAttachmentByID(ctx, attachment.ID); refreshErr == nil {
 		attachment = refreshed
@@ -374,6 +448,9 @@ func (s *AttachmentService) CompleteAttachmentUploadSession(ctx context.Context,
 		return models.Attachment{}, err
 	}
 	_ = os.Remove(session.TempPath)
+	if session.ThumbnailTempPath != "" {
+		_ = os.Remove(session.ThumbnailTempPath)
+	}
 	return attachment, nil
 }
 

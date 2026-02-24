@@ -848,8 +848,21 @@ func (s *SQLStore) CreateAttachmentUploadSession(ctx context.Context, session mo
 
 	_, err := s.db.ExecContext(
 		ctx,
-		`INSERT INTO attachment_upload_sessions (id, creator_id, filename, type, size, memo_name, temp_path, received_size, create_time, update_time)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO attachment_upload_sessions (
+			id,
+			creator_id,
+			filename,
+			type,
+			size,
+			memo_name,
+			temp_path,
+			thumbnail_filename,
+			thumbnail_type,
+			thumbnail_temp_path,
+			received_size,
+			create_time,
+			update_time
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		session.ID,
 		session.CreatorID,
 		session.Filename,
@@ -857,6 +870,9 @@ func (s *SQLStore) CreateAttachmentUploadSession(ctx context.Context, session mo
 		session.Size,
 		session.MemoName,
 		session.TempPath,
+		session.ThumbnailFilename,
+		session.ThumbnailType,
+		session.ThumbnailTempPath,
 		session.ReceivedSize,
 		createTime.Format(time.RFC3339Nano),
 		updateTime.Format(time.RFC3339Nano),
@@ -874,7 +890,20 @@ func (s *SQLStore) GetAttachmentUploadSessionByID(ctx context.Context, id string
 	var updateTime string
 	err := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, creator_id, filename, type, size, memo_name, temp_path, received_size, create_time, update_time
+		`SELECT
+			id,
+			creator_id,
+			filename,
+			type,
+			size,
+			memo_name,
+			temp_path,
+			thumbnail_filename,
+			thumbnail_type,
+			thumbnail_temp_path,
+			received_size,
+			create_time,
+			update_time
 		FROM attachment_upload_sessions
 		WHERE id = ?`,
 		id,
@@ -886,6 +915,9 @@ func (s *SQLStore) GetAttachmentUploadSessionByID(ctx context.Context, id string
 		&session.Size,
 		&memoName,
 		&session.TempPath,
+		&session.ThumbnailFilename,
+		&session.ThumbnailType,
+		&session.ThumbnailTempPath,
 		&session.ReceivedSize,
 		&createTime,
 		&updateTime,

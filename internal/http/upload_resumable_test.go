@@ -2,7 +2,11 @@ package http
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
+	"image"
+	"image/color"
+	"image/jpeg"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +21,11 @@ func TestAttachmentResumableUploadFlow(t *testing.T) {
 		"filename": "video.mp4",
 		"type":     "video/mp4",
 		"size":     12,
+		"thumbnail": map[string]any{
+			"filename": "video_preview.jpg",
+			"type":     "image/jpeg",
+			"content":  base64.StdEncoding.EncodeToString(mustJPEGBytes(t, 480, 270)),
+		},
 	}
 	createBody, _ := json.Marshal(createPayload)
 	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/attachments/uploads", bytes.NewReader(createBody))
@@ -129,4 +138,27 @@ func TestAttachmentResumableUploadFlow(t *testing.T) {
 	if attachment.Size != "12" {
 		t.Fatalf("expected size=12, got %s", attachment.Size)
 	}
+	if attachment.ThumbnailName == "" || attachment.ThumbnailFilename == "" {
+		t.Fatalf("expected thumbnail metadata, got name=%q filename=%q", attachment.ThumbnailName, attachment.ThumbnailFilename)
+	}
+}
+
+func mustJPEGBytes(t *testing.T, width int, height int) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			img.Set(x, y, color.RGBA{
+				R: uint8((x * 11) % 255),
+				G: uint8((y * 17) % 255),
+				B: uint8((x + y) % 255),
+				A: 255,
+			})
+		}
+	}
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 82}); err != nil {
+		t.Fatalf("encode jpeg failed: %v", err)
+	}
+	return buf.Bytes()
 }

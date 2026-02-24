@@ -7,6 +7,7 @@ import (
 	"image"
 	"image/color"
 	"image/jpeg"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -260,6 +261,77 @@ func TestCreateAttachment_DoesNotGenerateThumbnailForNonImage(t *testing.T) {
 	}
 	if attachment.ThumbnailStorageKey != "" {
 		t.Fatalf("unexpected thumbnail exists for non-image attachment")
+	}
+}
+
+func TestCompleteAttachmentUploadSession_UsesClientProvidedThumbnail(t *testing.T) {
+	services := setupTestServices(t)
+	localStore, err := storage.NewLocalStore(filepath.Join(t.TempDir(), "uploads"))
+	if err != nil {
+		t.Fatalf("NewLocalStore() error = %v", err)
+	}
+	attachmentService := NewAttachmentService(services.store, localStore)
+	user := mustCreateUser(t, services.store, "attach-upload-thumbnail-video")
+
+	videoData := []byte("video binary data")
+	thumbnailData := generateTestJPEGBytes(t, 800, 450)
+	session, err := attachmentService.CreateAttachmentUploadSession(
+		context.Background(),
+		user.ID,
+		CreateAttachmentUploadSessionInput{
+			Filename: "clip.mp4",
+			Type:     "video/mp4",
+			Size:     int64(len(videoData)),
+			Thumbnail: &CreateAttachmentUploadSessionThumbnailInput{
+				Filename: "clip_preview.jpg",
+				Type:     "image/jpeg",
+				Content:  base64.StdEncoding.EncodeToString(thumbnailData),
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("CreateAttachmentUploadSession() error = %v", err)
+	}
+	if strings.TrimSpace(session.ThumbnailTempPath) == "" {
+		t.Fatalf("expected thumbnail temp path to be populated")
+	}
+
+	session, err = attachmentService.AppendAttachmentUploadChunk(
+		context.Background(),
+		user.ID,
+		session.ID,
+		0,
+		videoData,
+	)
+	if err != nil {
+		t.Fatalf("AppendAttachmentUploadChunk() error = %v", err)
+	}
+	if session.ReceivedSize != int64(len(videoData)) {
+		t.Fatalf("unexpected upload offset, got %d", session.ReceivedSize)
+	}
+
+	attachment, err := attachmentService.CompleteAttachmentUploadSession(context.Background(), user.ID, session.ID)
+	if err != nil {
+		t.Fatalf("CompleteAttachmentUploadSession() error = %v", err)
+	}
+	if attachment.ThumbnailStorageKey == "" {
+		t.Fatalf("expected provided thumbnail to be stored")
+	}
+	if attachment.ThumbnailFilename != "clip_preview.jpg" {
+		t.Fatalf("unexpected thumbnail filename: %s", attachment.ThumbnailFilename)
+	}
+	if attachment.ThumbnailType != "image/jpeg" {
+		t.Fatalf("unexpected thumbnail type: %s", attachment.ThumbnailType)
+	}
+
+	thumbnailReader, err := localStore.Open(context.Background(), attachment.ThumbnailStorageKey)
+	if err != nil {
+		t.Fatalf("expected thumbnail object to exist, open error = %v", err)
+	}
+	_ = thumbnailReader.Close()
+
+	if _, err := os.Stat(session.ThumbnailTempPath); !os.IsNotExist(err) {
+		t.Fatalf("expected thumbnail temp file removed, stat err=%v", err)
 	}
 }
 

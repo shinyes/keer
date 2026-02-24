@@ -354,15 +354,24 @@ func NewRouter(cfg config.Config, userService *service.UserService, memoService 
 		if err := c.BodyParser(&req); err != nil {
 			return badRequest(c, "invalid request body")
 		}
+		var thumbnail *service.CreateAttachmentUploadSessionThumbnailInput
+		if req.Thumbnail != nil {
+			thumbnail = &service.CreateAttachmentUploadSessionThumbnailInput{
+				Filename: req.Thumbnail.Filename,
+				Type:     req.Thumbnail.Type,
+				Content:  req.Thumbnail.Content,
+			}
+		}
 
 		session, err := attachmentService.CreateAttachmentUploadSession(
 			c.Context(),
 			currentUser.ID,
 			service.CreateAttachmentUploadSessionInput{
-				Filename: req.Filename,
-				Type:     req.Type,
-				Size:     req.Size,
-				MemoName: req.Memo,
+				Filename:  req.Filename,
+				Type:      req.Type,
+				Size:      req.Size,
+				MemoName:  req.Memo,
+				Thumbnail: thumbnail,
 			},
 		)
 		if err != nil {

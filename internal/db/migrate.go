@@ -82,6 +82,9 @@ func Migrate(db *sql.DB) error {
 			size INTEGER NOT NULL,
 			memo_name TEXT,
 			temp_path TEXT NOT NULL,
+			thumbnail_filename TEXT NOT NULL DEFAULT '',
+			thumbnail_type TEXT NOT NULL DEFAULT '',
+			thumbnail_temp_path TEXT NOT NULL DEFAULT '',
 			received_size INTEGER NOT NULL DEFAULT 0,
 			create_time TEXT NOT NULL,
 			update_time TEXT NOT NULL,
@@ -102,5 +105,69 @@ func Migrate(db *sql.DB) error {
 		}
 	}
 
+	if err := ensureColumn(
+		db,
+		"attachment_upload_sessions",
+		"thumbnail_filename",
+		"TEXT NOT NULL DEFAULT ''",
+	); err != nil {
+		return fmt.Errorf("migration failed: %w", err)
+	}
+	if err := ensureColumn(
+		db,
+		"attachment_upload_sessions",
+		"thumbnail_type",
+		"TEXT NOT NULL DEFAULT ''",
+	); err != nil {
+		return fmt.Errorf("migration failed: %w", err)
+	}
+	if err := ensureColumn(
+		db,
+		"attachment_upload_sessions",
+		"thumbnail_temp_path",
+		"TEXT NOT NULL DEFAULT ''",
+	); err != nil {
+		return fmt.Errorf("migration failed: %w", err)
+	}
+
 	return nil
+}
+
+func ensureColumn(db *sql.DB, table string, column string, definition string) error {
+	exists, err := hasColumn(db, table, column)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+	_, err = db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, definition))
+	return err
+}
+
+func hasColumn(db *sql.DB, table string, column string) (bool, error) {
+	rows, err := db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var cid int
+		var name string
+		var dataType string
+		var notNull int
+		var defaultValue sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &dataType, &notNull, &defaultValue, &pk); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	return false, nil
 }
