@@ -964,6 +964,82 @@ func (s *SQLStore) UpdateAttachmentUploadSessionOffset(ctx context.Context, id s
 	return nil
 }
 
+func (s *SQLStore) ListAttachmentUploadSessionsUpdatedBefore(ctx context.Context, cutoff time.Time, limit int) ([]models.AttachmentUploadSession, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT
+			id,
+			creator_id,
+			filename,
+			type,
+			size,
+			memo_name,
+			temp_path,
+			thumbnail_filename,
+			thumbnail_type,
+			thumbnail_temp_path,
+			received_size,
+			create_time,
+			update_time
+		FROM attachment_upload_sessions
+		WHERE julianday(update_time) <= julianday(?)
+		ORDER BY update_time ASC
+		LIMIT ?`,
+		cutoff.UTC().Format(time.RFC3339Nano),
+		limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	sessions := make([]models.AttachmentUploadSession, 0, limit)
+	for rows.Next() {
+		var session models.AttachmentUploadSession
+		var memoName sql.NullString
+		var createTime string
+		var updateTime string
+		if err := rows.Scan(
+			&session.ID,
+			&session.CreatorID,
+			&session.Filename,
+			&session.Type,
+			&session.Size,
+			&memoName,
+			&session.TempPath,
+			&session.ThumbnailFilename,
+			&session.ThumbnailType,
+			&session.ThumbnailTempPath,
+			&session.ReceivedSize,
+			&createTime,
+			&updateTime,
+		); err != nil {
+			return nil, err
+		}
+		if memoName.Valid {
+			session.MemoName = &memoName.String
+		}
+		parsedCreateTime, err := parseTime(createTime)
+		if err != nil {
+			return nil, err
+		}
+		parsedUpdateTime, err := parseTime(updateTime)
+		if err != nil {
+			return nil, err
+		}
+		session.CreateTime = parsedCreateTime
+		session.UpdateTime = parsedUpdateTime
+		sessions = append(sessions, session)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return sessions, nil
+}
+
 func (s *SQLStore) DeleteAttachmentUploadSessionByID(ctx context.Context, id string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM attachment_upload_sessions WHERE id = ?`, id)
 	return err

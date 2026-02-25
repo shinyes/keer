@@ -31,6 +31,8 @@ const (
 	attachmentNanoIDLength    = 8
 	attachmentStorageKeyTries = 8
 	attachmentNanoIDAlphabet  = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	uploadSessionTTL          = 24 * time.Hour
+	uploadSessionCleanupBatch = 200
 )
 
 func NewAttachmentService(s *store.SQLStore, fileStorage storage.Store) *AttachmentService {
@@ -168,6 +170,8 @@ func (s *AttachmentService) CreateAttachment(ctx context.Context, userID int64, 
 }
 
 func (s *AttachmentService) CreateAttachmentUploadSession(ctx context.Context, userID int64, input CreateAttachmentUploadSessionInput) (models.AttachmentUploadSession, error) {
+	_ = s.CleanupExpiredUploadSessions(ctx)
+
 	filename := sanitizeFilename(input.Filename)
 	if filename == "" {
 		return models.AttachmentUploadSession{}, fmt.Errorf("filename cannot be empty")
@@ -271,6 +275,43 @@ func (s *AttachmentService) CreateAttachmentUploadSession(ctx context.Context, u
 		return models.AttachmentUploadSession{}, err
 	}
 	return session, nil
+}
+
+func (s *AttachmentService) CleanupExpiredUploadSessions(ctx context.Context) error {
+	cutoff := time.Now().UTC().Add(-uploadSessionTTL)
+	var firstErr error
+
+	for {
+		sessions, err := s.store.ListAttachmentUploadSessionsUpdatedBefore(ctx, cutoff, uploadSessionCleanupBatch)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			break
+		}
+		if len(sessions) == 0 {
+			break
+		}
+
+		for _, session := range sessions {
+			if err := s.store.DeleteAttachmentUploadSessionByID(ctx, session.ID); err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
+			}
+			_ = os.Remove(session.TempPath)
+			if session.ThumbnailTempPath != "" {
+				_ = os.Remove(session.ThumbnailTempPath)
+			}
+		}
+
+		if len(sessions) < uploadSessionCleanupBatch {
+			break
+		}
+	}
+
+	return firstErr
 }
 
 func (s *AttachmentService) GetAttachmentUploadSession(ctx context.Context, userID int64, uploadID string) (models.AttachmentUploadSession, error) {
