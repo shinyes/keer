@@ -29,12 +29,14 @@ func NewMemoService(s *store.SQLStore, markdownSvc *markdown.Service) *MemoServi
 type CreateMemoInput struct {
 	Content         string
 	Visibility      models.Visibility
+	Tags            []string
 	AttachmentNames []string
 }
 
 type UpdateMemoInput struct {
 	Content         *string
 	Visibility      *models.Visibility
+	Tags            *[]string
 	State           *models.MemoState
 	Pinned          *bool
 	AttachmentNames *[]string
@@ -56,6 +58,7 @@ func (s *MemoService) CreateMemo(ctx context.Context, creatorID int64, input Cre
 	if err != nil {
 		return MemoWithAttachments{}, err
 	}
+	payload.Tags = normalizeMemoTags(input.Tags)
 
 	attachmentIDs, err := s.resolveAttachmentIDsFromNames(ctx, creatorID, input.AttachmentNames)
 	if err != nil {
@@ -104,8 +107,19 @@ func (s *MemoService) UpdateMemo(ctx context.Context, updaterID int64, memoID in
 		if err != nil {
 			return MemoWithAttachments{}, err
 		}
+		payload.Tags = current.Payload.Tags
 		update.Payload = &payload
 		update.DisplayTime = ptrTime(time.Now().UTC())
+	}
+	if input.Tags != nil {
+		nextTags := normalizeMemoTags(*input.Tags)
+		if update.Payload != nil {
+			update.Payload.Tags = nextTags
+		} else {
+			payload := current.Payload
+			payload.Tags = nextTags
+			update.Payload = &payload
+		}
 	}
 	if input.Visibility != nil {
 		if !input.Visibility.IsValid() {
@@ -258,6 +272,7 @@ func (s *MemoService) RebuildAllMemoPayloads(ctx context.Context) (int, error) {
 		if err != nil {
 			return updated, err
 		}
+		payload.Tags = memo.Payload.Tags
 		if slices.Equal(payload.Tags, memo.Payload.Tags) &&
 			payload.Property == memo.Payload.Property {
 			continue
@@ -331,4 +346,24 @@ func parseResourceID(name string) (int64, error) {
 
 func ptrTime(t time.Time) *time.Time {
 	return &t
+}
+
+func normalizeMemoTags(tags []string) []string {
+	if len(tags) == 0 {
+		return []string{}
+	}
+	normalized := make([]string, 0, len(tags))
+	seen := make(map[string]struct{}, len(tags))
+	for _, raw := range tags {
+		tag := strings.TrimSpace(raw)
+		if tag == "" {
+			continue
+		}
+		if _, exists := seen[tag]; exists {
+			continue
+		}
+		seen[tag] = struct{}{}
+		normalized = append(normalized, tag)
+	}
+	return normalized
 }

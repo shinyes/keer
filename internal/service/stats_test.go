@@ -17,12 +17,14 @@ func TestGetUserTagCount(t *testing.T) {
 
 	if _, err := services.memoService.CreateMemo(ctx, owner.ID, CreateMemoInput{
 		Content:    "#alpha #alpha #beta",
+		Tags:       []string{"alpha", "alpha", "beta"},
 		Visibility: models.VisibilityPrivate,
 	}); err != nil {
 		t.Fatalf("CreateMemo private error = %v", err)
 	}
 	publicMemo, err := services.memoService.CreateMemo(ctx, owner.ID, CreateMemoInput{
 		Content:    "#beta #book/fiction",
+		Tags:       []string{"beta", "book/fiction"},
 		Visibility: models.VisibilityPublic,
 	})
 	if err != nil {
@@ -30,12 +32,14 @@ func TestGetUserTagCount(t *testing.T) {
 	}
 	if _, err := services.memoService.CreateMemo(ctx, owner.ID, CreateMemoInput{
 		Content:    "#alpha",
+		Tags:       []string{"alpha"},
 		Visibility: models.VisibilityProtected,
 	}); err != nil {
 		t.Fatalf("CreateMemo protected error = %v", err)
 	}
 	archivedMemo, err := services.memoService.CreateMemo(ctx, owner.ID, CreateMemoInput{
 		Content:    "#archived",
+		Tags:       []string{"archived"},
 		Visibility: models.VisibilityPublic,
 	})
 	if err != nil {

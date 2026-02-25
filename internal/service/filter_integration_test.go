@@ -16,18 +16,21 @@ func TestListMemos_TagInHierarchical(t *testing.T) {
 
 	if _, err := services.memoService.CreateMemo(ctx, user.ID, CreateMemoInput{
 		Content:    "#book",
+		Tags:       []string{"book"},
 		Visibility: models.VisibilityPrivate,
 	}); err != nil {
 		t.Fatalf("CreateMemo #book error = %v", err)
 	}
 	if _, err := services.memoService.CreateMemo(ctx, user.ID, CreateMemoInput{
 		Content:    "#book/fiction",
+		Tags:       []string{"book/fiction"},
 		Visibility: models.VisibilityPrivate,
 	}); err != nil {
 		t.Fatalf("CreateMemo #book/fiction error = %v", err)
 	}
 	if _, err := services.memoService.CreateMemo(ctx, user.ID, CreateMemoInput{
 		Content:    "#work",
+		Tags:       []string{"work"},
 		Visibility: models.VisibilityPrivate,
 	}); err != nil {
 		t.Fatalf("CreateMemo #work error = %v", err)
@@ -57,18 +60,21 @@ func TestListMemos_CELTagsExistsAndMembership(t *testing.T) {
 
 	if _, err := services.memoService.CreateMemo(ctx, user.ID, CreateMemoInput{
 		Content:    "#book [link](https://example.com)",
+		Tags:       []string{"book"},
 		Visibility: models.VisibilityPrivate,
 	}); err != nil {
 		t.Fatalf("CreateMemo #book error = %v", err)
 	}
 	if _, err := services.memoService.CreateMemo(ctx, user.ID, CreateMemoInput{
 		Content:    "#book/fiction",
+		Tags:       []string{"book/fiction"},
 		Visibility: models.VisibilityPrivate,
 	}); err != nil {
 		t.Fatalf("CreateMemo #book/fiction error = %v", err)
 	}
 	if _, err := services.memoService.CreateMemo(ctx, user.ID, CreateMemoInput{
 		Content:    "#work",
+		Tags:       []string{"work"},
 		Visibility: models.VisibilityPrivate,
 	}); err != nil {
 		t.Fatalf("CreateMemo #work error = %v", err)
@@ -115,6 +121,7 @@ func TestListMemos_CELNotAndNotEqual(t *testing.T) {
 
 	m1, err := services.memoService.CreateMemo(ctx, user.ID, CreateMemoInput{
 		Content:    "#work",
+		Tags:       []string{"work"},
 		Visibility: models.VisibilityPrivate,
 	})
 	if err != nil {
@@ -122,6 +129,7 @@ func TestListMemos_CELNotAndNotEqual(t *testing.T) {
 	}
 	m2, err := services.memoService.CreateMemo(ctx, user.ID, CreateMemoInput{
 		Content:    "#book",
+		Tags:       []string{"book"},
 		Visibility: models.VisibilityPublic,
 	})
 	if err != nil {
@@ -129,6 +137,7 @@ func TestListMemos_CELNotAndNotEqual(t *testing.T) {
 	}
 	m3, err := services.memoService.CreateMemo(ctx, user.ID, CreateMemoInput{
 		Content:    "#book/fiction",
+		Tags:       []string{"book/fiction"},
 		Visibility: models.VisibilityPrivate,
 	})
 	if err != nil {

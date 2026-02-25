@@ -389,37 +389,17 @@ func (s *SQLStore) TouchPersonalAccessToken(ctx context.Context, tokenID int64) 
 }
 
 func (s *SQLStore) CreateMemo(ctx context.Context, creatorID int64, content string, visibility models.Visibility, state models.MemoState, pinned bool, payload models.MemoPayload, displayTime time.Time) (models.Memo, error) {
-	payloadJSON, err := json.Marshal(payload)
-	if err != nil {
-		return models.Memo{}, err
-	}
-	now := time.Now().UTC()
-	pinnedInt := 0
-	if pinned {
-		pinnedInt = 1
-	}
-	res, err := s.db.ExecContext(
+	return s.CreateMemoWithAttachments(
 		ctx,
-		`INSERT INTO memos (creator_id, content, visibility, state, pinned, create_time, update_time, display_time, payload_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		creatorID,
 		content,
 		visibility,
 		state,
-		pinnedInt,
-		now.Format(time.RFC3339Nano),
-		now.Format(time.RFC3339Nano),
-		displayTime.UTC().Format(time.RFC3339Nano),
-		string(payloadJSON),
+		pinned,
+		payload,
+		displayTime,
+		[]int64{},
 	)
-	if err != nil {
-		return models.Memo{}, err
-	}
-	id, err := res.LastInsertId()
-	if err != nil {
-		return models.Memo{}, err
-	}
-	return s.GetMemoByID(ctx, id)
 }
 
 func (s *SQLStore) CreateMemoWithAttachments(ctx context.Context, creatorID int64, content string, visibility models.Visibility, state models.MemoState, pinned bool, payload models.MemoPayload, displayTime time.Time, attachmentIDs []int64) (models.Memo, error) {
@@ -463,6 +443,9 @@ func (s *SQLStore) CreateMemoWithAttachments(ctx context.Context, creatorID int6
 	if err := setMemoAttachmentsInTx(ctx, tx, memoID, attachmentIDs); err != nil {
 		return models.Memo{}, err
 	}
+	if err := setMemoTagsInTx(ctx, tx, creatorID, memoID, payload.Tags); err != nil {
+		return models.Memo{}, err
+	}
 	if err := tx.Commit(); err != nil {
 		return models.Memo{}, err
 	}
@@ -477,55 +460,23 @@ func (s *SQLStore) GetMemoByID(ctx context.Context, id int64) (models.Memo, erro
 		WHERE id = ?`,
 		id,
 	)
-	return scanMemo(row)
+	memo, err := scanMemo(row)
+	if err != nil {
+		return models.Memo{}, err
+	}
+	tagsByMemoID, err := s.listMemoTagsByMemoIDs(ctx, []int64{memo.ID})
+	if err != nil {
+		return models.Memo{}, err
+	}
+	memo.Payload.Tags = tagsByMemoID[memo.ID]
+	if memo.Payload.Tags == nil {
+		memo.Payload.Tags = []string{}
+	}
+	return memo, nil
 }
 
 func (s *SQLStore) UpdateMemo(ctx context.Context, memoID int64, update MemoUpdate) (models.Memo, error) {
-	assignments := make([]string, 0, 8)
-	args := make([]any, 0, 8)
-
-	if update.Content != nil {
-		assignments = append(assignments, "content = ?")
-		args = append(args, *update.Content)
-	}
-	if update.Visibility != nil {
-		assignments = append(assignments, "visibility = ?")
-		args = append(args, *update.Visibility)
-	}
-	if update.State != nil {
-		assignments = append(assignments, "state = ?")
-		args = append(args, *update.State)
-	}
-	if update.Pinned != nil {
-		pinnedInt := 0
-		if *update.Pinned {
-			pinnedInt = 1
-		}
-		assignments = append(assignments, "pinned = ?")
-		args = append(args, pinnedInt)
-	}
-	if update.DisplayTime != nil {
-		assignments = append(assignments, "display_time = ?")
-		args = append(args, update.DisplayTime.UTC().Format(time.RFC3339Nano))
-	}
-	if update.Payload != nil {
-		payloadJSON, err := json.Marshal(*update.Payload)
-		if err != nil {
-			return models.Memo{}, err
-		}
-		assignments = append(assignments, "payload_json = ?")
-		args = append(args, string(payloadJSON))
-	}
-
-	assignments = append(assignments, "update_time = ?")
-	args = append(args, time.Now().UTC().Format(time.RFC3339Nano))
-	args = append(args, memoID)
-
-	query := fmt.Sprintf(`UPDATE memos SET %s WHERE id = ?`, strings.Join(assignments, ", "))
-	if _, err := s.db.ExecContext(ctx, query, args...); err != nil {
-		return models.Memo{}, err
-	}
-	return s.GetMemoByID(ctx, memoID)
+	return s.UpdateMemoWithAttachments(ctx, memoID, update, nil)
 }
 
 func (s *SQLStore) UpdateMemoWithAttachments(ctx context.Context, memoID int64, update MemoUpdate, attachmentIDs *[]int64) (models.Memo, error) {
@@ -582,6 +533,15 @@ func (s *SQLStore) UpdateMemoWithAttachments(ctx context.Context, memoID int64, 
 
 	if attachmentIDs != nil {
 		if err := setMemoAttachmentsInTx(ctx, tx, memoID, *attachmentIDs); err != nil {
+			return models.Memo{}, err
+		}
+	}
+	if update.Payload != nil {
+		var creatorID int64
+		if err := tx.QueryRowContext(ctx, `SELECT creator_id FROM memos WHERE id = ?`, memoID).Scan(&creatorID); err != nil {
+			return models.Memo{}, err
+		}
+		if err := setMemoTagsInTx(ctx, tx, creatorID, memoID, update.Payload.Tags); err != nil {
 			return models.Memo{}, err
 		}
 	}
@@ -657,15 +617,19 @@ func (s *SQLStore) ListVisibleMemos(ctx context.Context, viewerID int64, state *
 		if len(group.Options) == 0 {
 			continue
 		}
-		query += ` AND EXISTS (SELECT 1 FROM json_each(m.payload_json, '$.tags') jt WHERE `
+		query += ` AND EXISTS (
+			SELECT 1
+			FROM memo_tags mt
+			JOIN tags t ON t.id = mt.tag_id
+			WHERE mt.memo_id = m.id AND `
 		groupClauses := make([]string, 0, len(group.Options))
 		for _, option := range group.Options {
 			switch option.Kind {
 			case TagMatchExact:
-				groupClauses = append(groupClauses, `jt.value = ?`)
+				groupClauses = append(groupClauses, `t.name = ?`)
 				args = append(args, option.Value)
 			case TagMatchPrefix:
-				groupClauses = append(groupClauses, `jt.value LIKE ?`)
+				groupClauses = append(groupClauses, `t.name LIKE ?`)
 				args = append(args, option.Value+"%")
 			}
 		}
@@ -678,15 +642,19 @@ func (s *SQLStore) ListVisibleMemos(ctx context.Context, viewerID int64, state *
 		if len(group.Options) == 0 {
 			continue
 		}
-		query += ` AND NOT EXISTS (SELECT 1 FROM json_each(m.payload_json, '$.tags') jt WHERE `
+		query += ` AND NOT EXISTS (
+			SELECT 1
+			FROM memo_tags mt
+			JOIN tags t ON t.id = mt.tag_id
+			WHERE mt.memo_id = m.id AND `
 		groupClauses := make([]string, 0, len(group.Options))
 		for _, option := range group.Options {
 			switch option.Kind {
 			case TagMatchExact:
-				groupClauses = append(groupClauses, `jt.value = ?`)
+				groupClauses = append(groupClauses, `t.name = ?`)
 				args = append(args, option.Value)
 			case TagMatchPrefix:
-				groupClauses = append(groupClauses, `jt.value LIKE ?`)
+				groupClauses = append(groupClauses, `t.name LIKE ?`)
 				args = append(args, option.Value+"%")
 			}
 		}
@@ -716,7 +684,13 @@ func (s *SQLStore) ListVisibleMemos(ctx context.Context, viewerID int64, state *
 		}
 		memos = append(memos, memo)
 	}
-	return memos, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := s.hydrateMemoTags(ctx, memos); err != nil {
+		return nil, err
+	}
+	return memos, nil
 }
 
 func (s *SQLStore) ListVisibleMemosByCreator(ctx context.Context, creatorID int64, viewerID int64, state models.MemoState) ([]models.Memo, error) {
@@ -743,7 +717,13 @@ func (s *SQLStore) ListVisibleMemosByCreator(ctx context.Context, creatorID int6
 		}
 		result = append(result, memo)
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := s.hydrateMemoTags(ctx, result); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func (s *SQLStore) ListAllMemos(ctx context.Context) ([]models.Memo, error) {
@@ -766,7 +746,13 @@ func (s *SQLStore) ListAllMemos(ctx context.Context) ([]models.Memo, error) {
 		}
 		result = append(result, memo)
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := s.hydrateMemoTags(ctx, result); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func (s *SQLStore) UpdateMemoPayload(ctx context.Context, memoID int64, payload models.MemoPayload) error {
@@ -774,8 +760,23 @@ func (s *SQLStore) UpdateMemoPayload(ctx context.Context, memoID int64, payload 
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `UPDATE memos SET payload_json = ? WHERE id = ?`, string(data), memoID)
-	return err
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	if _, err := tx.ExecContext(ctx, `UPDATE memos SET payload_json = ? WHERE id = ?`, string(data), memoID); err != nil {
+		return err
+	}
+	var creatorID int64
+	if err := tx.QueryRowContext(ctx, `SELECT creator_id FROM memos WHERE id = ?`, memoID).Scan(&creatorID); err != nil {
+		return err
+	}
+	if err := setMemoTagsInTx(ctx, tx, creatorID, memoID, payload.Tags); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *SQLStore) CreateAttachment(ctx context.Context, creatorID int64, filename string, externalLink string, fileType string, size int64, contentHash string, storageType string, storageKey string) (models.Attachment, error) {
@@ -1146,6 +1147,64 @@ func setMemoAttachmentsInTx(ctx context.Context, tx *sql.Tx, memoID int64, attac
 	return nil
 }
 
+func setMemoTagsInTx(ctx context.Context, tx *sql.Tx, creatorID int64, memoID int64, tags []string) error {
+	normalized := normalizeTagNames(tags)
+	if _, err := tx.ExecContext(ctx, `DELETE FROM memo_tags WHERE memo_id = ?`, memoID); err != nil {
+		return err
+	}
+	if len(normalized) == 0 {
+		_, err := tx.ExecContext(
+			ctx,
+			`DELETE FROM tags WHERE creator_id = ? AND id NOT IN (SELECT DISTINCT tag_id FROM memo_tags)`,
+			creatorID,
+		)
+		return err
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for _, tag := range normalized {
+		if _, err := tx.ExecContext(
+			ctx,
+			`INSERT INTO tags (creator_id, name, create_time, update_time)
+			VALUES (?, ?, ?, ?)
+			ON CONFLICT(creator_id, name) DO UPDATE SET update_time = excluded.update_time`,
+			creatorID,
+			tag,
+			now,
+			now,
+		); err != nil {
+			return err
+		}
+
+		var tagID int64
+		if err := tx.QueryRowContext(
+			ctx,
+			`SELECT id FROM tags WHERE creator_id = ? AND name = ?`,
+			creatorID,
+			tag,
+		).Scan(&tagID); err != nil {
+			return err
+		}
+
+		if _, err := tx.ExecContext(
+			ctx,
+			`INSERT INTO memo_tags (memo_id, tag_id, create_time) VALUES (?, ?, ?)`,
+			memoID,
+			tagID,
+			now,
+		); err != nil {
+			return err
+		}
+	}
+
+	_, err := tx.ExecContext(
+		ctx,
+		`DELETE FROM tags WHERE creator_id = ? AND id NOT IN (SELECT DISTINCT tag_id FROM memo_tags)`,
+		creatorID,
+	)
+	return err
+}
+
 func (s *SQLStore) ListAttachmentsByMemoIDs(ctx context.Context, memoIDs []int64) (map[int64][]models.Attachment, error) {
 	result := make(map[int64][]models.Attachment)
 	if len(memoIDs) == 0 {
@@ -1225,7 +1284,100 @@ func (s *SQLStore) GetMemoByIDAndCreator(ctx context.Context, memoID int64, crea
 		memoID,
 		creatorID,
 	)
-	return scanMemo(row)
+	memo, err := scanMemo(row)
+	if err != nil {
+		return models.Memo{}, err
+	}
+	tagsByMemoID, err := s.listMemoTagsByMemoIDs(ctx, []int64{memo.ID})
+	if err != nil {
+		return models.Memo{}, err
+	}
+	memo.Payload.Tags = tagsByMemoID[memo.ID]
+	if memo.Payload.Tags == nil {
+		memo.Payload.Tags = []string{}
+	}
+	return memo, nil
+}
+
+func (s *SQLStore) listMemoTagsByMemoIDs(ctx context.Context, memoIDs []int64) (map[int64][]string, error) {
+	result := make(map[int64][]string)
+	if len(memoIDs) == 0 {
+		return result, nil
+	}
+
+	placeholders := make([]string, 0, len(memoIDs))
+	args := make([]any, 0, len(memoIDs))
+	for _, memoID := range memoIDs {
+		placeholders = append(placeholders, "?")
+		args = append(args, memoID)
+	}
+
+	query := fmt.Sprintf(
+		`SELECT mt.memo_id, t.name
+		FROM memo_tags mt
+		JOIN tags t ON t.id = mt.tag_id
+		WHERE mt.memo_id IN (%s)
+		ORDER BY mt.memo_id, t.name`,
+		strings.Join(placeholders, ","),
+	)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var memoID int64
+		var tag string
+		if err := rows.Scan(&memoID, &tag); err != nil {
+			return nil, err
+		}
+		result[memoID] = append(result[memoID], tag)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (s *SQLStore) hydrateMemoTags(ctx context.Context, memos []models.Memo) error {
+	memoIDs := make([]int64, 0, len(memos))
+	for _, memo := range memos {
+		memoIDs = append(memoIDs, memo.ID)
+	}
+	tagsByMemoID, err := s.listMemoTagsByMemoIDs(ctx, memoIDs)
+	if err != nil {
+		return err
+	}
+	for i := range memos {
+		tags := tagsByMemoID[memos[i].ID]
+		if tags == nil {
+			tags = []string{}
+		}
+		memos[i].Payload.Tags = tags
+	}
+	return nil
+}
+
+func normalizeTagNames(tags []string) []string {
+	if len(tags) == 0 {
+		return []string{}
+	}
+
+	out := make([]string, 0, len(tags))
+	seen := make(map[string]struct{}, len(tags))
+	for _, raw := range tags {
+		tag := strings.TrimSpace(raw)
+		if tag == "" {
+			continue
+		}
+		if _, exists := seen[tag]; exists {
+			continue
+		}
+		seen[tag] = struct{}{}
+		out = append(out, tag)
+	}
+	return out
 }
 
 func scanMemo(scanner interface {

@@ -45,6 +45,27 @@ func Migrate(db *sql.DB) error {
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_memos_creator ON memos(creator_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_memos_state ON memos(state);`,
+		`CREATE TABLE IF NOT EXISTS tags (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			creator_id INTEGER NOT NULL,
+			name TEXT NOT NULL,
+			create_time TEXT NOT NULL,
+			update_time TEXT NOT NULL,
+			UNIQUE(creator_id, name),
+			FOREIGN KEY(creator_id) REFERENCES users(id) ON DELETE CASCADE
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_tags_creator_name ON tags(creator_id, name);`,
+		`CREATE INDEX IF NOT EXISTS idx_tags_creator_update_time ON tags(creator_id, update_time DESC);`,
+		`CREATE TABLE IF NOT EXISTS memo_tags (
+			memo_id INTEGER NOT NULL,
+			tag_id INTEGER NOT NULL,
+			create_time TEXT NOT NULL,
+			PRIMARY KEY(memo_id, tag_id),
+			FOREIGN KEY(memo_id) REFERENCES memos(id) ON DELETE CASCADE,
+			FOREIGN KEY(tag_id) REFERENCES tags(id) ON DELETE CASCADE
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_memo_tags_memo ON memo_tags(memo_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_memo_tags_tag ON memo_tags(tag_id);`,
 		`CREATE TABLE IF NOT EXISTS attachments (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			creator_id INTEGER NOT NULL,

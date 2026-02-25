@@ -59,12 +59,14 @@ type listMemosResponse struct {
 type createMemoRequest struct {
 	Content     string          `json:"content"`
 	Visibility  string          `json:"visibility"`
+	Tags        []string        `json:"tags,omitempty"`
 	Attachments []apiAttachment `json:"attachments"`
 }
 
 type updateMemoRequest struct {
 	Content     *string          `json:"content"`
 	Visibility  *string          `json:"visibility"`
+	Tags        *[]string        `json:"tags"`
 	State       *string          `json:"state"`
 	Pinned      *bool            `json:"pinned"`
 	Attachments *[]apiAttachment `json:"attachments"`

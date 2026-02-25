@@ -232,6 +232,7 @@ func NewRouter(cfg config.Config, userService *service.UserService, memoService 
 			service.CreateMemoInput{
 				Content:         req.Content,
 				Visibility:      visibility,
+				Tags:            req.Tags,
 				AttachmentNames: attachmentNames,
 			},
 		)
@@ -282,6 +283,7 @@ func NewRouter(cfg config.Config, userService *service.UserService, memoService 
 			service.UpdateMemoInput{
 				Content:         req.Content,
 				Visibility:      visibility,
+				Tags:            req.Tags,
 				State:           state,
 				Pinned:          req.Pinned,
 				AttachmentNames: attachmentNames,
