@@ -108,12 +108,25 @@ type createAttachmentUploadThumbnailRequest struct {
 }
 
 type attachmentUploadSessionResponse struct {
-	UploadID     string  `json:"uploadId"`
-	Filename     string  `json:"filename"`
-	Type         string  `json:"type"`
-	Size         string  `json:"size"`
-	UploadedSize string  `json:"uploadedSize"`
-	Memo         *string `json:"memo,omitempty"`
+	UploadID           string  `json:"uploadId"`
+	Filename           string  `json:"filename"`
+	Type               string  `json:"type"`
+	Size               string  `json:"size"`
+	UploadedSize       string  `json:"uploadedSize"`
+	Memo               *string `json:"memo,omitempty"`
+	UploadMode         string  `json:"uploadMode,omitempty"`
+	DirectUploadURL    string  `json:"directUploadUrl,omitempty"`
+	DirectUploadMethod string  `json:"directUploadMethod,omitempty"`
+	MultipartPartSize  string  `json:"multipartPartSize,omitempty"`
+}
+
+type attachmentMultipartPartUploadResponse struct {
+	UploadID   string `json:"uploadId"`
+	PartNumber int32  `json:"partNumber"`
+	Offset     string `json:"offset"`
+	Size       string `json:"size"`
+	UploadURL  string `json:"uploadUrl"`
+	Method     string `json:"method"`
 }
 
 type listAttachmentsResponse struct {
@@ -121,16 +134,17 @@ type listAttachmentsResponse struct {
 }
 
 type apiAttachment struct {
-	Name              string `json:"name"`
-	CreateTime        string `json:"createTime,omitempty"`
-	Filename          string `json:"filename,omitempty"`
-	ExternalLink      string `json:"externalLink,omitempty"`
-	Type              string `json:"type,omitempty"`
-	Size              string `json:"size,omitempty"`
-	ThumbnailName     string `json:"thumbnailName,omitempty"`
-	ThumbnailFilename string `json:"thumbnailFilename,omitempty"`
-	ThumbnailType     string `json:"thumbnailType,omitempty"`
-	Memo              string `json:"memo,omitempty"`
+	Name                  string `json:"name"`
+	CreateTime            string `json:"createTime,omitempty"`
+	Filename              string `json:"filename,omitempty"`
+	ExternalLink          string `json:"externalLink,omitempty"`
+	Type                  string `json:"type,omitempty"`
+	Size                  string `json:"size,omitempty"`
+	ThumbnailName         string `json:"thumbnailName,omitempty"`
+	ThumbnailExternalLink string `json:"thumbnailExternalLink,omitempty"`
+	ThumbnailFilename     string `json:"thumbnailFilename,omitempty"`
+	ThumbnailType         string `json:"thumbnailType,omitempty"`
+	Memo                  string `json:"memo,omitempty"`
 }
 
 type userSettingResponse struct {

@@ -29,6 +29,16 @@ func NewRouter(cfg config.Config, userService *service.UserService, memoService 
 	app.Use(httpAccessLogMiddleware())
 	app.Use(cors.New())
 
+	buildAPIAttachment := func(attachment models.Attachment, memoName string) apiAttachment {
+		return toAPIAttachment(attachment, memoName, "", "")
+	}
+
+	buildAPIMemo := func(memo service.MemoWithAttachments) apiMemo {
+		return toAPIMemo(memo, func(attachment models.Attachment, memoName string) apiAttachment {
+			return buildAPIAttachment(attachment, memoName)
+		})
+	}
+
 	app.Get("/api/v1/instance/profile", func(c *fiber.Ctx) error {
 		return c.JSON(profileResponse{
 			KeerAPIVersion: cfg.KeerAPIVersion,
@@ -203,7 +213,7 @@ func NewRouter(cfg config.Config, userService *service.UserService, memoService 
 			NextPageToken: nextToken,
 		}
 		for _, item := range memos {
-			resp.Memos = append(resp.Memos, toAPIMemo(item))
+			resp.Memos = append(resp.Memos, buildAPIMemo(item))
 		}
 		return c.JSON(resp)
 	})
@@ -239,7 +249,7 @@ func NewRouter(cfg config.Config, userService *service.UserService, memoService 
 		if err != nil {
 			return badRequest(c, err.Error())
 		}
-		return c.JSON(toAPIMemo(created))
+		return c.JSON(buildAPIMemo(created))
 	})
 
 	api.Patch("/memos/:id", func(c *fiber.Ctx) error {
@@ -295,7 +305,7 @@ func NewRouter(cfg config.Config, userService *service.UserService, memoService 
 			}
 			return badRequest(c, err.Error())
 		}
-		return c.JSON(toAPIMemo(updated))
+		return c.JSON(buildAPIMemo(updated))
 	})
 
 	api.Delete("/memos/:id", func(c *fiber.Ctx) error {
@@ -323,7 +333,7 @@ func NewRouter(cfg config.Config, userService *service.UserService, memoService 
 			Attachments: make([]apiAttachment, 0, len(attachments)),
 		}
 		for _, attachment := range attachments {
-			resp.Attachments = append(resp.Attachments, toAPIAttachment(attachment, ""))
+			resp.Attachments = append(resp.Attachments, buildAPIAttachment(attachment, ""))
 		}
 		return c.JSON(resp)
 	})
@@ -347,7 +357,7 @@ func NewRouter(cfg config.Config, userService *service.UserService, memoService 
 		if err != nil {
 			return badRequest(c, err.Error())
 		}
-		return c.JSON(toAPIAttachment(attachment, ""))
+		return c.JSON(buildAPIAttachment(attachment, ""))
 	})
 
 	api.Post("/attachments/uploads", func(c *fiber.Ctx) error {
@@ -379,11 +389,31 @@ func NewRouter(cfg config.Config, userService *service.UserService, memoService 
 		if err != nil {
 			return badRequest(c, err.Error())
 		}
+		progress, err := attachmentService.GetAttachmentUploadSessionProgress(c.Context(), session)
+		if err != nil {
+			return internalError(c, err)
+		}
+		directUploadSession, err := attachmentService.GetDirectUploadSession(c.Context(), session)
+		if err != nil {
+			return internalError(c, err)
+		}
+		multipartSession, err := attachmentService.GetMultipartUploadPartSession(session)
+		if err != nil {
+			return internalError(c, err)
+		}
 
-		c.Set("Upload-Offset", models.Int64ToString(session.ReceivedSize))
+		c.Set("Upload-Offset", models.Int64ToString(progress))
 		c.Set("Upload-Length", models.Int64ToString(session.Size))
 		c.Set("Upload-Id", session.ID)
-		return c.Status(fiber.StatusCreated).JSON(toAttachmentUploadSessionResponse(session))
+		if multipartSession != nil {
+			c.Set("Upload-Mode", "DIRECT_MULTIPART")
+			c.Set("Upload-Part-Size", models.Int64ToString(multipartSession.PartSize))
+		} else if directUploadSession != nil {
+			c.Set("Upload-Mode", "DIRECT_PRESIGNED_PUT")
+		} else {
+			c.Set("Upload-Mode", "RESUMABLE")
+		}
+		return c.Status(fiber.StatusCreated).JSON(toAttachmentUploadSessionResponse(session, progress, directUploadSession, multipartSession))
 	})
 
 	api.Head("/attachments/uploads/:id", func(c *fiber.Ctx) error {
@@ -400,10 +430,94 @@ func NewRouter(cfg config.Config, userService *service.UserService, memoService 
 			}
 			return internalError(c, err)
 		}
-		c.Set("Upload-Offset", models.Int64ToString(session.ReceivedSize))
+		progress, err := attachmentService.GetAttachmentUploadSessionProgress(c.Context(), session)
+		if err != nil {
+			return internalError(c, err)
+		}
+		c.Set("Upload-Offset", models.Int64ToString(progress))
 		c.Set("Upload-Length", models.Int64ToString(session.Size))
 		c.Set("Upload-Id", session.ID)
+		multipartSession, err := attachmentService.GetMultipartUploadPartSession(session)
+		if err != nil {
+			return internalError(c, err)
+		}
+		if multipartSession != nil {
+			c.Set("Upload-Mode", "DIRECT_MULTIPART")
+			c.Set("Upload-Part-Size", models.Int64ToString(multipartSession.PartSize))
+		} else if attachmentService.IsDirectUploadSession(session) {
+			c.Set("Upload-Mode", "DIRECT_PRESIGNED_PUT")
+		} else {
+			c.Set("Upload-Mode", "RESUMABLE")
+		}
 		return c.SendStatus(fiber.StatusNoContent)
+	})
+
+	api.Get("/attachments/uploads/:id/parts/:partNumber", func(c *fiber.Ctx) error {
+		currentUser := CurrentUser(c)
+		uploadID := strings.TrimSpace(c.Params("id"))
+		if uploadID == "" {
+			return badRequest(c, "invalid upload id")
+		}
+		partNumberRaw := strings.TrimSpace(c.Params("partNumber"))
+		partNumber64, err := strconv.ParseInt(partNumberRaw, 10, 32)
+		if err != nil || partNumber64 <= 0 {
+			return badRequest(c, "invalid part number")
+		}
+		expectedOffset, err := parseNonNegativeInt64(c.Query("offset"))
+		if err != nil {
+			return badRequest(c, "invalid offset")
+		}
+		requestedSize, err := parseNonNegativeInt64(c.Query("size"))
+		if err != nil || requestedSize <= 0 {
+			return badRequest(c, "invalid size")
+		}
+
+		session, err := attachmentService.GetAttachmentUploadSession(c.Context(), currentUser.ID, uploadID)
+		if err != nil {
+			if errors.Is(err, service.ErrUploadSessionNotFound) || errors.Is(err, sql.ErrNoRows) {
+				return notFound(c, "upload session not found")
+			}
+			return internalError(c, err)
+		}
+		multipartUploadURL, err := attachmentService.CreateMultipartPartUploadURL(
+			c.Context(),
+			session,
+			expectedOffset,
+			int32(partNumber64),
+			requestedSize,
+		)
+		if err != nil {
+			var mismatch *service.UploadOffsetMismatchError
+			if errors.As(err, &mismatch) {
+				c.Set("Upload-Offset", models.Int64ToString(mismatch.CurrentOffset))
+				return c.Status(fiber.StatusConflict).JSON(fiber.Map{
+					"message":       "upload offset mismatch",
+					"currentOffset": models.Int64ToString(mismatch.CurrentOffset),
+				})
+			}
+			if errors.Is(err, service.ErrMultipartPartInvalid) || errors.Is(err, service.ErrUploadExceedsTotalSize) {
+				return badRequest(c, err.Error())
+			}
+			if errors.Is(err, service.ErrUploadNotComplete) || errors.Is(err, service.ErrUploadChunkUnsupported) {
+				return c.Status(fiber.StatusConflict).JSON(fiber.Map{
+					"message": err.Error(),
+				})
+			}
+			return internalError(c, err)
+		}
+		if multipartUploadURL == nil {
+			return c.Status(fiber.StatusConflict).JSON(fiber.Map{
+				"message": "upload session is not multipart mode",
+			})
+		}
+		return c.JSON(attachmentMultipartPartUploadResponse{
+			UploadID:   session.ID,
+			PartNumber: multipartUploadURL.PartNumber,
+			Offset:     models.Int64ToString(multipartUploadURL.Offset),
+			Size:       models.Int64ToString(multipartUploadURL.Size),
+			UploadURL:  multipartUploadURL.UploadURL,
+			Method:     multipartUploadURL.Method,
+		})
 	})
 
 	api.Patch("/attachments/uploads/:id", func(c *fiber.Ctx) error {
@@ -441,12 +555,18 @@ func NewRouter(cfg config.Config, userService *service.UserService, memoService 
 			if errors.Is(err, service.ErrUploadExceedsTotalSize) {
 				return badRequest(c, err.Error())
 			}
+			if errors.Is(err, service.ErrUploadChunkUnsupported) {
+				return c.Status(fiber.StatusConflict).JSON(fiber.Map{
+					"message": "upload chunk is not supported for this upload session",
+				})
+			}
 			return internalError(c, err)
 		}
 
 		c.Set("Upload-Offset", models.Int64ToString(session.ReceivedSize))
 		c.Set("Upload-Length", models.Int64ToString(session.Size))
 		c.Set("Upload-Id", session.ID)
+		c.Set("Upload-Mode", "RESUMABLE")
 		return c.SendStatus(fiber.StatusNoContent)
 	})
 
@@ -469,7 +589,7 @@ func NewRouter(cfg config.Config, userService *service.UserService, memoService 
 			}
 			return internalError(c, err)
 		}
-		return c.JSON(toAPIAttachment(attachment, ""))
+		return c.JSON(buildAPIAttachment(attachment, ""))
 	})
 
 	api.Delete("/attachments/uploads/:id", func(c *fiber.Ctx) error {
@@ -525,6 +645,11 @@ func NewRouter(cfg config.Config, userService *service.UserService, memoService 
 		if strings.TrimSpace(attachment.ThumbnailStorageKey) == "" {
 			return notFound(c, "thumbnail not found")
 		}
+		if directURL, ok, err := attachmentService.PresignAttachmentThumbnailURL(c.Context(), attachment); err != nil {
+			return internalError(c, err)
+		} else if ok {
+			return c.Redirect(directURL, fiber.StatusTemporaryRedirect)
+		}
 
 		thumbnailStream, err := attachmentService.OpenAttachmentThumbnailStream(c.Context(), attachment)
 		if err != nil {
@@ -565,6 +690,11 @@ func NewRouter(cfg config.Config, userService *service.UserService, memoService 
 
 		if attachment.CreatorID != currentUser.ID {
 			return c.SendStatus(fiber.StatusForbidden)
+		}
+		if directURL, ok, err := attachmentService.PresignAttachmentURL(c.Context(), attachment); err != nil {
+			return internalError(c, err)
+		} else if ok {
+			return c.Redirect(directURL, fiber.StatusTemporaryRedirect)
 		}
 
 		start, end, hasRange, err := parseSingleByteRange(c.Get(fiber.HeaderRange), attachment.Size)
@@ -655,10 +785,17 @@ func toAPIUser(user models.User) apiUser {
 	}
 }
 
-func toAPIMemo(memo service.MemoWithAttachments) apiMemo {
+func toAPIMemo(
+	memo service.MemoWithAttachments,
+	attachmentMapper func(attachment models.Attachment, memoName string) apiAttachment,
+) apiMemo {
 	attachments := make([]apiAttachment, 0, len(memo.Attachments))
 	for _, attachment := range memo.Attachments {
-		attachments = append(attachments, toAPIAttachment(attachment, memo.Memo.Name()))
+		if attachmentMapper != nil {
+			attachments = append(attachments, attachmentMapper(attachment, memo.Memo.Name()))
+			continue
+		}
+		attachments = append(attachments, toAPIAttachment(attachment, memo.Memo.Name(), "", ""))
 	}
 	tags := memo.Memo.Payload.Tags
 	if tags == nil {
@@ -679,34 +816,58 @@ func toAPIMemo(memo service.MemoWithAttachments) apiMemo {
 	}
 }
 
-func toAPIAttachment(attachment models.Attachment, memoName string) apiAttachment {
+func toAPIAttachment(attachment models.Attachment, memoName string, directLink string, directThumbnailLink string) apiAttachment {
 	thumbnailName := ""
 	if strings.TrimSpace(attachment.ThumbnailStorageKey) != "" {
 		thumbnailName = "attachments/" + models.Int64ToString(attachment.ID) + "/thumbnail"
 	}
+	externalLink := strings.TrimSpace(directLink)
+	if externalLink == "" {
+		externalLink = strings.TrimSpace(attachment.ExternalLink)
+	}
+	thumbnailExternalLink := strings.TrimSpace(directThumbnailLink)
 	return apiAttachment{
-		Name:              "attachments/" + models.Int64ToString(attachment.ID),
-		CreateTime:        formatTime(attachment.CreateTime),
-		Filename:          attachment.Filename,
-		ExternalLink:      attachment.ExternalLink,
-		Type:              attachment.Type,
-		Size:              models.Int64ToString(attachment.Size),
-		ThumbnailName:     thumbnailName,
-		ThumbnailFilename: attachment.ThumbnailFilename,
-		ThumbnailType:     attachment.ThumbnailType,
-		Memo:              memoName,
+		Name:                  "attachments/" + models.Int64ToString(attachment.ID),
+		CreateTime:            formatTime(attachment.CreateTime),
+		Filename:              attachment.Filename,
+		ExternalLink:          externalLink,
+		Type:                  attachment.Type,
+		Size:                  models.Int64ToString(attachment.Size),
+		ThumbnailName:         thumbnailName,
+		ThumbnailExternalLink: thumbnailExternalLink,
+		ThumbnailFilename:     attachment.ThumbnailFilename,
+		ThumbnailType:         attachment.ThumbnailType,
+		Memo:                  memoName,
 	}
 }
 
-func toAttachmentUploadSessionResponse(session models.AttachmentUploadSession) attachmentUploadSessionResponse {
-	return attachmentUploadSessionResponse{
+func toAttachmentUploadSessionResponse(
+	session models.AttachmentUploadSession,
+	uploadedSize int64,
+	directUpload *service.DirectUploadSession,
+	multipart *service.MultipartUploadPartSession,
+) attachmentUploadSessionResponse {
+	resp := attachmentUploadSessionResponse{
 		UploadID:     session.ID,
 		Filename:     session.Filename,
 		Type:         session.Type,
 		Size:         models.Int64ToString(session.Size),
-		UploadedSize: models.Int64ToString(session.ReceivedSize),
+		UploadedSize: models.Int64ToString(uploadedSize),
 		Memo:         session.MemoName,
 	}
+	if multipart != nil {
+		resp.UploadMode = "DIRECT_MULTIPART"
+		resp.MultipartPartSize = models.Int64ToString(multipart.PartSize)
+		return resp
+	}
+	if directUpload != nil {
+		resp.UploadMode = "DIRECT_PRESIGNED_PUT"
+		resp.DirectUploadURL = directUpload.UploadURL
+		resp.DirectUploadMethod = directUpload.Method
+		return resp
+	}
+	resp.UploadMode = "RESUMABLE"
+	return resp
 }
 
 func parseID(raw string) (int64, error) {
