@@ -40,11 +40,18 @@ func Migrate(db *sql.DB) error {
 			create_time TEXT NOT NULL,
 			update_time TEXT NOT NULL,
 			display_time TEXT NOT NULL,
-			payload_json TEXT NOT NULL DEFAULT '{}',
+			latitude REAL,
+			longitude REAL,
+			has_link INTEGER NOT NULL DEFAULT 0,
+			has_task_list INTEGER NOT NULL DEFAULT 0,
+			has_code INTEGER NOT NULL DEFAULT 0,
+			has_incomplete_tasks INTEGER NOT NULL DEFAULT 0,
 			FOREIGN KEY(creator_id) REFERENCES users(id) ON DELETE CASCADE
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_memos_creator ON memos(creator_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_memos_state ON memos(state);`,
+		`CREATE INDEX IF NOT EXISTS idx_memos_has_task_list ON memos(has_task_list);`,
+		`CREATE INDEX IF NOT EXISTS idx_memos_has_incomplete_tasks ON memos(has_incomplete_tasks);`,
 		`CREATE TABLE IF NOT EXISTS tags (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			creator_id INTEGER NOT NULL,
@@ -150,6 +157,85 @@ func Migrate(db *sql.DB) error {
 	); err != nil {
 		return fmt.Errorf("migration failed: %w", err)
 	}
+	if err := ensureColumn(
+		db,
+		"memos",
+		"latitude",
+		"REAL",
+	); err != nil {
+		return fmt.Errorf("migration failed: %w", err)
+	}
+	if err := ensureColumn(
+		db,
+		"memos",
+		"longitude",
+		"REAL",
+	); err != nil {
+		return fmt.Errorf("migration failed: %w", err)
+	}
+	if err := ensureColumn(
+		db,
+		"memos",
+		"has_link",
+		"INTEGER NOT NULL DEFAULT 0",
+	); err != nil {
+		return fmt.Errorf("migration failed: %w", err)
+	}
+	if err := ensureColumn(
+		db,
+		"memos",
+		"has_task_list",
+		"INTEGER NOT NULL DEFAULT 0",
+	); err != nil {
+		return fmt.Errorf("migration failed: %w", err)
+	}
+	if err := ensureColumn(
+		db,
+		"memos",
+		"has_code",
+		"INTEGER NOT NULL DEFAULT 0",
+	); err != nil {
+		return fmt.Errorf("migration failed: %w", err)
+	}
+	if err := ensureColumn(
+		db,
+		"memos",
+		"has_incomplete_tasks",
+		"INTEGER NOT NULL DEFAULT 0",
+	); err != nil {
+		return fmt.Errorf("migration failed: %w", err)
+	}
+	hasPayloadJSON, err := hasColumn(db, "memos", "payload_json")
+	if err != nil {
+		return fmt.Errorf("migration failed: %w", err)
+	}
+	if hasPayloadJSON {
+		if _, err := db.Exec(`
+			UPDATE memos
+			SET
+				has_link = CASE
+					WHEN json_valid(payload_json) THEN COALESCE(CAST(JSON_EXTRACT(payload_json, '$.property.hasLink') AS INTEGER), 0)
+					ELSE 0
+				END,
+				has_task_list = CASE
+					WHEN json_valid(payload_json) THEN COALESCE(CAST(JSON_EXTRACT(payload_json, '$.property.hasTaskList') AS INTEGER), 0)
+					ELSE 0
+				END,
+				has_code = CASE
+					WHEN json_valid(payload_json) THEN COALESCE(CAST(JSON_EXTRACT(payload_json, '$.property.hasCode') AS INTEGER), 0)
+					ELSE 0
+				END,
+				has_incomplete_tasks = CASE
+					WHEN json_valid(payload_json) THEN COALESCE(CAST(JSON_EXTRACT(payload_json, '$.property.hasIncompleteTasks') AS INTEGER), 0)
+					ELSE 0
+				END
+		`); err != nil {
+			return fmt.Errorf("migration failed: %w", err)
+		}
+		if err := removeMemoPayloadJSONColumn(db); err != nil {
+			return fmt.Errorf("migration failed: %w", err)
+		}
+	}
 
 	return nil
 }
@@ -164,6 +250,22 @@ func ensureColumn(db *sql.DB, table string, column string, definition string) er
 	}
 	_, err = db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, definition))
 	return err
+}
+
+func removeMemoPayloadJSONColumn(db *sql.DB) error {
+	exists, err := hasColumn(db, "memos", "payload_json")
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+
+	// On older SQLite variants, DROP COLUMN may be unsupported.
+	// Keep the legacy column in place to avoid destructive table rebuilds
+	// that can break under active foreign key constraints.
+	_, _ = db.Exec("ALTER TABLE memos DROP COLUMN payload_json")
+	return nil
 }
 
 func hasColumn(db *sql.DB, table string, column string) (bool, error) {
