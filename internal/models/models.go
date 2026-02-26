@@ -64,16 +64,17 @@ type PersonalAccessToken struct {
 }
 
 type Memo struct {
-	ID          int64
-	CreatorID   int64
-	Content     string
-	Visibility  Visibility
-	State       MemoState
-	Pinned      bool
-	CreateTime  time.Time
-	UpdateTime  time.Time
-	DisplayTime time.Time
-	Payload     MemoPayload
+	ID         int64
+	CreatorID  int64
+	Content    string
+	Visibility Visibility
+	State      MemoState
+	Pinned     bool
+	CreateTime time.Time
+	UpdateTime time.Time
+	Latitude   *float64
+	Longitude  *float64
+	Payload    MemoPayload
 }
 
 type Attachment struct {

@@ -1,6 +1,10 @@
 package http
 
-import "time"
+import (
+	"bytes"
+	"encoding/json"
+	"time"
+)
 
 type getCurrentUserResponse struct {
 	User apiUser `json:"user"`
@@ -62,6 +66,8 @@ type createMemoRequest struct {
 	Tags        []string        `json:"tags,omitempty"`
 	Attachments []apiAttachment `json:"attachments"`
 	CreateTime  *string         `json:"createTime"`
+	Latitude    *float64        `json:"latitude,omitempty"`
+	Longitude   *float64        `json:"longitude,omitempty"`
 }
 
 type updateMemoRequest struct {
@@ -71,6 +77,8 @@ type updateMemoRequest struct {
 	State       *string          `json:"state"`
 	Pinned      *bool            `json:"pinned"`
 	Attachments *[]apiAttachment `json:"attachments"`
+	Latitude    optionalFloat64  `json:"latitude"`
+	Longitude   optionalFloat64  `json:"longitude"`
 }
 
 type apiMemo struct {
@@ -79,10 +87,11 @@ type apiMemo struct {
 	Creator     string          `json:"creator,omitempty"`
 	CreateTime  string          `json:"createTime,omitempty"`
 	UpdateTime  string          `json:"updateTime,omitempty"`
-	DisplayTime string          `json:"displayTime,omitempty"`
 	Content     string          `json:"content,omitempty"`
 	Visibility  string          `json:"visibility,omitempty"`
 	Pinned      bool            `json:"pinned"`
+	Latitude    *float64        `json:"latitude,omitempty"`
+	Longitude   *float64        `json:"longitude,omitempty"`
 	Attachments []apiAttachment `json:"attachments,omitempty"`
 	Tags        []string        `json:"tags,omitempty"`
 }
@@ -162,6 +171,27 @@ type userStatsResponse struct {
 
 type profileResponse struct {
 	KeerAPIVersion string `json:"keer_api_version"`
+}
+
+type optionalFloat64 struct {
+	Set   bool
+	Value *float64
+}
+
+func (o *optionalFloat64) UnmarshalJSON(data []byte) error {
+	o.Set = true
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
+		o.Value = nil
+		return nil
+	}
+
+	var value float64
+	if err := json.Unmarshal(trimmed, &value); err != nil {
+		return err
+	}
+	o.Value = &value
+	return nil
 }
 
 func formatTime(t time.Time) string {

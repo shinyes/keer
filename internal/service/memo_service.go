@@ -31,7 +31,9 @@ type CreateMemoInput struct {
 	Visibility      models.Visibility
 	Tags            []string
 	AttachmentNames []string
-	DisplayTime     *time.Time // 客户端指定的创建时间，为 nil 时使用当前时间
+	CreateTime      *time.Time // 客户端指定的创建时间，为 nil 时使用当前时间
+	Latitude        *float64
+	Longitude       *float64
 }
 
 type UpdateMemoInput struct {
@@ -41,6 +43,10 @@ type UpdateMemoInput struct {
 	State           *models.MemoState
 	Pinned          *bool
 	AttachmentNames *[]string
+	LatitudeSet     bool
+	Latitude        *float64
+	LongitudeSet    bool
+	Longitude       *float64
 }
 
 type MemoWithAttachments struct {
@@ -54,6 +60,9 @@ func (s *MemoService) CreateMemo(ctx context.Context, creatorID int64, input Cre
 	if !visibility.IsValid() {
 		visibility = models.VisibilityPrivate
 	}
+	if err := validateCoordinates(input.Latitude, input.Longitude); err != nil {
+		return MemoWithAttachments{}, err
+	}
 
 	payload, err := s.markdown.ExtractPayload(content)
 	if err != nil {
@@ -66,9 +75,9 @@ func (s *MemoService) CreateMemo(ctx context.Context, creatorID int64, input Cre
 		return MemoWithAttachments{}, err
 	}
 
-	displayTime := time.Now().UTC()
-	if input.DisplayTime != nil && !input.DisplayTime.IsZero() {
-		displayTime = input.DisplayTime.UTC()
+	createTime := time.Now().UTC()
+	if input.CreateTime != nil && !input.CreateTime.IsZero() {
+		createTime = input.CreateTime.UTC()
 	}
 
 	memo, err := s.store.CreateMemoWithAttachments(
@@ -79,7 +88,9 @@ func (s *MemoService) CreateMemo(ctx context.Context, creatorID int64, input Cre
 		models.MemoStateNormal,
 		false,
 		payload,
-		displayTime,
+		createTime,
+		input.Latitude,
+		input.Longitude,
 		attachmentIDs,
 	)
 	if err != nil {
@@ -104,6 +115,9 @@ func (s *MemoService) UpdateMemo(ctx context.Context, updaterID int64, memoID in
 	if current.CreatorID != updaterID {
 		return MemoWithAttachments{}, sql.ErrNoRows
 	}
+	if err := validateCoordinates(input.Latitude, input.Longitude); err != nil {
+		return MemoWithAttachments{}, err
+	}
 
 	update := store.MemoUpdate{}
 	if input.Content != nil {
@@ -115,7 +129,6 @@ func (s *MemoService) UpdateMemo(ctx context.Context, updaterID int64, memoID in
 		}
 		payload.Tags = current.Payload.Tags
 		update.Payload = &payload
-		update.DisplayTime = ptrTime(time.Now().UTC())
 	}
 	if input.Tags != nil {
 		nextTags := normalizeMemoTags(*input.Tags)
@@ -141,6 +154,14 @@ func (s *MemoService) UpdateMemo(ctx context.Context, updaterID int64, memoID in
 	}
 	if input.Pinned != nil {
 		update.Pinned = input.Pinned
+	}
+	if input.LatitudeSet || input.Latitude != nil {
+		update.LatitudeSet = true
+		update.Latitude = input.Latitude
+	}
+	if input.LongitudeSet || input.Longitude != nil {
+		update.LongitudeSet = true
+		update.Longitude = input.Longitude
 	}
 
 	var attachmentIDs *[]int64
@@ -352,10 +373,6 @@ func parseResourceID(name string) (int64, error) {
 	return id, nil
 }
 
-func ptrTime(t time.Time) *time.Time {
-	return &t
-}
-
 func normalizeMemoTags(tags []string) []string {
 	if len(tags) == 0 {
 		return []string{}
@@ -374,4 +391,14 @@ func normalizeMemoTags(tags []string) []string {
 		normalized = append(normalized, tag)
 	}
 	return normalized
+}
+
+func validateCoordinates(latitude *float64, longitude *float64) error {
+	if latitude != nil && (*latitude < -90 || *latitude > 90) {
+		return fmt.Errorf("invalid latitude")
+	}
+	if longitude != nil && (*longitude < -180 || *longitude > 180) {
+		return fmt.Errorf("invalid longitude")
+	}
+	return nil
 }

@@ -242,10 +242,10 @@ func NewRouter(cfg config.Config, userService *service.UserService, memoService 
 		if req.Visibility == "" {
 			visibility = currentUser.DefaultVisibility
 		}
-		var displayTime *time.Time
+		var createTime *time.Time
 		if req.CreateTime != nil {
 			if t, err := time.Parse(time.RFC3339Nano, *req.CreateTime); err == nil {
-				displayTime = &t
+				createTime = &t
 			}
 		}
 		created, err := memoService.CreateMemo(
@@ -256,7 +256,9 @@ func NewRouter(cfg config.Config, userService *service.UserService, memoService 
 				Visibility:      visibility,
 				Tags:            req.Tags,
 				AttachmentNames: attachmentNames,
-				DisplayTime:     displayTime,
+				CreateTime:      createTime,
+				Latitude:        req.Latitude,
+				Longitude:       req.Longitude,
 			},
 		)
 		if err != nil {
@@ -310,6 +312,10 @@ func NewRouter(cfg config.Config, userService *service.UserService, memoService 
 				State:           state,
 				Pinned:          req.Pinned,
 				AttachmentNames: attachmentNames,
+				LatitudeSet:     req.Latitude.Set,
+				Latitude:        req.Latitude.Value,
+				LongitudeSet:    req.Longitude.Set,
+				Longitude:       req.Longitude.Value,
 			},
 		)
 		if err != nil {
@@ -820,10 +826,11 @@ func toAPIMemo(
 		Creator:     "users/" + models.Int64ToString(memo.Memo.CreatorID),
 		CreateTime:  formatTime(memo.Memo.CreateTime),
 		UpdateTime:  formatTime(memo.Memo.UpdateTime),
-		DisplayTime: formatTime(memo.Memo.DisplayTime),
 		Content:     memo.Memo.Content,
 		Visibility:  string(memo.Memo.Visibility),
 		Pinned:      memo.Memo.Pinned,
+		Latitude:    memo.Memo.Latitude,
+		Longitude:   memo.Memo.Longitude,
 		Attachments: attachments,
 		Tags:        tags,
 	}

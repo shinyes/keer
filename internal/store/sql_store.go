@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -26,12 +25,15 @@ func (s *SQLStore) DB() *sql.DB {
 }
 
 type MemoUpdate struct {
-	Content     *string
-	Visibility  *models.Visibility
-	State       *models.MemoState
-	Pinned      *bool
-	DisplayTime *time.Time
-	Payload     *models.MemoPayload
+	Content      *string
+	Visibility   *models.Visibility
+	State        *models.MemoState
+	Pinned       *bool
+	LatitudeSet  bool
+	Latitude     *float64
+	LongitudeSet bool
+	Longitude    *float64
+	Payload      *models.MemoPayload
 }
 
 func (s *SQLStore) CreateUser(ctx context.Context, username string, displayName string, role string) (models.User, error) {
@@ -388,7 +390,7 @@ func (s *SQLStore) TouchPersonalAccessToken(ctx context.Context, tokenID int64) 
 	return err
 }
 
-func (s *SQLStore) CreateMemo(ctx context.Context, creatorID int64, content string, visibility models.Visibility, state models.MemoState, pinned bool, payload models.MemoPayload, displayTime time.Time) (models.Memo, error) {
+func (s *SQLStore) CreateMemo(ctx context.Context, creatorID int64, content string, visibility models.Visibility, state models.MemoState, pinned bool, payload models.MemoPayload, createTime time.Time, latitude *float64, longitude *float64) (models.Memo, error) {
 	return s.CreateMemoWithAttachments(
 		ctx,
 		creatorID,
@@ -397,16 +399,14 @@ func (s *SQLStore) CreateMemo(ctx context.Context, creatorID int64, content stri
 		state,
 		pinned,
 		payload,
-		displayTime,
+		createTime,
+		latitude,
+		longitude,
 		[]int64{},
 	)
 }
 
-func (s *SQLStore) CreateMemoWithAttachments(ctx context.Context, creatorID int64, content string, visibility models.Visibility, state models.MemoState, pinned bool, payload models.MemoPayload, displayTime time.Time, attachmentIDs []int64) (models.Memo, error) {
-	payloadJSON, err := json.Marshal(payload)
-	if err != nil {
-		return models.Memo{}, err
-	}
+func (s *SQLStore) CreateMemoWithAttachments(ctx context.Context, creatorID int64, content string, visibility models.Visibility, state models.MemoState, pinned bool, payload models.MemoPayload, createTime time.Time, latitude *float64, longitude *float64, attachmentIDs []int64) (models.Memo, error) {
 	now := time.Now().UTC()
 	pinnedInt := 0
 	if pinned {
@@ -421,17 +421,25 @@ func (s *SQLStore) CreateMemoWithAttachments(ctx context.Context, creatorID int6
 
 	res, err := tx.ExecContext(
 		ctx,
-		`INSERT INTO memos (creator_id, content, visibility, state, pinned, create_time, update_time, display_time, payload_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO memos (
+			creator_id, content, visibility, state, pinned, create_time, update_time, display_time,
+			latitude, longitude, has_link, has_task_list, has_code, has_incomplete_tasks
+		)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		creatorID,
 		content,
 		visibility,
 		state,
 		pinnedInt,
+		createTime.UTC().Format(time.RFC3339Nano),
 		now.Format(time.RFC3339Nano),
-		now.Format(time.RFC3339Nano),
-		displayTime.UTC().Format(time.RFC3339Nano),
-		string(payloadJSON),
+		createTime.UTC().Format(time.RFC3339Nano),
+		latitude,
+		longitude,
+		boolToSQLiteInt(payload.Property.HasLink),
+		boolToSQLiteInt(payload.Property.HasTaskList),
+		boolToSQLiteInt(payload.Property.HasCode),
+		boolToSQLiteInt(payload.Property.HasIncompleteTasks),
 	)
 	if err != nil {
 		return models.Memo{}, err
@@ -455,7 +463,7 @@ func (s *SQLStore) CreateMemoWithAttachments(ctx context.Context, creatorID int6
 func (s *SQLStore) GetMemoByID(ctx context.Context, id int64) (models.Memo, error) {
 	row := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, creator_id, content, visibility, state, pinned, create_time, update_time, display_time, payload_json
+		`SELECT id, creator_id, content, visibility, state, pinned, create_time, update_time, display_time, latitude, longitude, has_link, has_task_list, has_code, has_incomplete_tasks
 		FROM memos
 		WHERE id = ?`,
 		id,
@@ -509,17 +517,31 @@ func (s *SQLStore) UpdateMemoWithAttachments(ctx context.Context, memoID int64, 
 		assignments = append(assignments, "pinned = ?")
 		args = append(args, pinnedInt)
 	}
-	if update.DisplayTime != nil {
-		assignments = append(assignments, "display_time = ?")
-		args = append(args, update.DisplayTime.UTC().Format(time.RFC3339Nano))
+	if update.LatitudeSet || update.Latitude != nil {
+		assignments = append(assignments, "latitude = ?")
+		if update.Latitude != nil {
+			args = append(args, *update.Latitude)
+		} else {
+			args = append(args, nil)
+		}
+	}
+	if update.LongitudeSet || update.Longitude != nil {
+		assignments = append(assignments, "longitude = ?")
+		if update.Longitude != nil {
+			args = append(args, *update.Longitude)
+		} else {
+			args = append(args, nil)
+		}
 	}
 	if update.Payload != nil {
-		payloadJSON, err := json.Marshal(*update.Payload)
-		if err != nil {
-			return models.Memo{}, err
-		}
-		assignments = append(assignments, "payload_json = ?")
-		args = append(args, string(payloadJSON))
+		assignments = append(assignments, "has_link = ?")
+		args = append(args, boolToSQLiteInt(update.Payload.Property.HasLink))
+		assignments = append(assignments, "has_task_list = ?")
+		args = append(args, boolToSQLiteInt(update.Payload.Property.HasTaskList))
+		assignments = append(assignments, "has_code = ?")
+		args = append(args, boolToSQLiteInt(update.Payload.Property.HasCode))
+		assignments = append(assignments, "has_incomplete_tasks = ?")
+		args = append(args, boolToSQLiteInt(update.Payload.Property.HasIncompleteTasks))
 	}
 
 	assignments = append(assignments, "update_time = ?")
@@ -572,7 +594,7 @@ func (s *SQLStore) ListVisibleMemos(ctx context.Context, viewerID int64, state *
 		return []models.Memo{}, nil
 	}
 
-	query := `SELECT m.id, m.creator_id, m.content, m.visibility, m.state, m.pinned, m.create_time, m.update_time, m.display_time, m.payload_json
+	query := `SELECT m.id, m.creator_id, m.content, m.visibility, m.state, m.pinned, m.create_time, m.update_time, m.display_time, m.latitude, m.longitude, m.has_link, m.has_task_list, m.has_code, m.has_incomplete_tasks
 		FROM memos m
 		WHERE (m.creator_id = ? OR m.visibility IN ('PUBLIC', 'PROTECTED'))`
 	args := []any{viewerID}
@@ -611,17 +633,17 @@ func (s *SQLStore) ListVisibleMemos(ctx context.Context, viewerID int64, state *
 		args = append(args, boolToSQLiteInt(*prefilter.Pinned))
 	}
 
-	addJSONBoolConstraint := func(path string, value *bool) {
+	addPropertyConstraint := func(column string, value *bool) {
 		if value == nil {
 			return
 		}
-		query += fmt.Sprintf(` AND COALESCE(JSON_EXTRACT(m.payload_json, '$.property.%s'), 0) = ?`, path)
+		query += fmt.Sprintf(` AND m.%s = ?`, column)
 		args = append(args, boolToSQLiteInt(*value))
 	}
-	addJSONBoolConstraint("hasLink", prefilter.HasLink)
-	addJSONBoolConstraint("hasTaskList", prefilter.HasTaskList)
-	addJSONBoolConstraint("hasCode", prefilter.HasCode)
-	addJSONBoolConstraint("hasIncompleteTasks", prefilter.HasIncompleteTasks)
+	addPropertyConstraint("has_link", prefilter.HasLink)
+	addPropertyConstraint("has_task_list", prefilter.HasTaskList)
+	addPropertyConstraint("has_code", prefilter.HasCode)
+	addPropertyConstraint("has_incomplete_tasks", prefilter.HasIncompleteTasks)
 
 	for _, group := range prefilter.TagGroups {
 		if len(group.Options) == 0 {
@@ -674,7 +696,7 @@ func (s *SQLStore) ListVisibleMemos(ctx context.Context, viewerID int64, state *
 		query += strings.Join(groupClauses, " OR ") + `)`
 	}
 
-	query += ` ORDER BY m.display_time DESC, m.id DESC`
+	query += ` ORDER BY m.create_time DESC, m.id DESC`
 	if limit > 0 {
 		query += ` LIMIT ? OFFSET ?`
 		args = append(args, limit, offset)
@@ -704,14 +726,14 @@ func (s *SQLStore) ListVisibleMemos(ctx context.Context, viewerID int64, state *
 }
 
 func (s *SQLStore) ListVisibleMemosByCreator(ctx context.Context, creatorID int64, viewerID int64, state models.MemoState) ([]models.Memo, error) {
-	query := `SELECT id, creator_id, content, visibility, state, pinned, create_time, update_time, display_time, payload_json
+	query := `SELECT id, creator_id, content, visibility, state, pinned, create_time, update_time, display_time, latitude, longitude, has_link, has_task_list, has_code, has_incomplete_tasks
 		FROM memos
 		WHERE creator_id = ? AND state = ?`
 	args := []any{creatorID, state}
 	if creatorID != viewerID {
 		query += ` AND visibility IN ('PUBLIC', 'PROTECTED')`
 	}
-	query += ` ORDER BY display_time DESC, id DESC`
+	query += ` ORDER BY create_time DESC, id DESC`
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -739,7 +761,7 @@ func (s *SQLStore) ListVisibleMemosByCreator(ctx context.Context, creatorID int6
 func (s *SQLStore) ListAllMemos(ctx context.Context) ([]models.Memo, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT id, creator_id, content, visibility, state, pinned, create_time, update_time, display_time, payload_json
+		`SELECT id, creator_id, content, visibility, state, pinned, create_time, update_time, display_time, latitude, longitude, has_link, has_task_list, has_code, has_incomplete_tasks
 		FROM memos
 		ORDER BY id`,
 	)
@@ -766,17 +788,23 @@ func (s *SQLStore) ListAllMemos(ctx context.Context) ([]models.Memo, error) {
 }
 
 func (s *SQLStore) UpdateMemoPayload(ctx context.Context, memoID int64, payload models.MemoPayload) error {
-	data, err := json.Marshal(payload)
-	if err != nil {
-		return err
-	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	if _, err := tx.ExecContext(ctx, `UPDATE memos SET payload_json = ? WHERE id = ?`, string(data), memoID); err != nil {
+	if _, err := tx.ExecContext(
+		ctx,
+		`UPDATE memos
+		SET has_link = ?, has_task_list = ?, has_code = ?, has_incomplete_tasks = ?
+		WHERE id = ?`,
+		boolToSQLiteInt(payload.Property.HasLink),
+		boolToSQLiteInt(payload.Property.HasTaskList),
+		boolToSQLiteInt(payload.Property.HasCode),
+		boolToSQLiteInt(payload.Property.HasIncompleteTasks),
+		memoID,
+	); err != nil {
 		return err
 	}
 	var creatorID int64
@@ -1364,7 +1392,7 @@ func (s *SQLStore) AttachmentBelongsToUser(ctx context.Context, attachmentID int
 func (s *SQLStore) GetMemoByIDAndCreator(ctx context.Context, memoID int64, creatorID int64) (models.Memo, error) {
 	row := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, creator_id, content, visibility, state, pinned, create_time, update_time, display_time, payload_json
+		`SELECT id, creator_id, content, visibility, state, pinned, create_time, update_time, display_time, latitude, longitude, has_link, has_task_list, has_code, has_incomplete_tasks
 		FROM memos
 		WHERE id = ? AND creator_id = ?`,
 		memoID,
@@ -1475,8 +1503,13 @@ func scanMemo(scanner interface {
 	var pinned int
 	var createTime string
 	var updateTime string
-	var displayTime string
-	var payloadJSON string
+	var legacySortTime string
+	var latitude sql.NullFloat64
+	var longitude sql.NullFloat64
+	var hasLink int
+	var hasTaskList int
+	var hasCode int
+	var hasIncompleteTasks int
 	if err := scanner.Scan(
 		&memo.ID,
 		&memo.CreatorID,
@@ -1486,8 +1519,13 @@ func scanMemo(scanner interface {
 		&pinned,
 		&createTime,
 		&updateTime,
-		&displayTime,
-		&payloadJSON,
+		&legacySortTime,
+		&latitude,
+		&longitude,
+		&hasLink,
+		&hasTaskList,
+		&hasCode,
+		&hasIncompleteTasks,
 	); err != nil {
 		return models.Memo{}, err
 	}
@@ -1503,19 +1541,22 @@ func scanMemo(scanner interface {
 	if err != nil {
 		return models.Memo{}, err
 	}
-	memo.DisplayTime, err = parseTime(displayTime)
-	if err != nil {
+	if _, err = parseTime(legacySortTime); err != nil {
 		return models.Memo{}, err
 	}
-	if strings.TrimSpace(payloadJSON) == "" {
-		payloadJSON = "{}"
+	if latitude.Valid {
+		memo.Latitude = &latitude.Float64
 	}
-	if err := json.Unmarshal([]byte(payloadJSON), &memo.Payload); err != nil {
-		return models.Memo{}, err
+	if longitude.Valid {
+		memo.Longitude = &longitude.Float64
 	}
-	if memo.Payload.Tags == nil {
-		memo.Payload.Tags = []string{}
+	memo.Payload.Property = models.MemoPayloadProperty{
+		HasLink:            hasLink == 1,
+		HasTaskList:        hasTaskList == 1,
+		HasCode:            hasCode == 1,
+		HasIncompleteTasks: hasIncompleteTasks == 1,
 	}
+	memo.Payload.Tags = []string{}
 	return memo, nil
 }
 
