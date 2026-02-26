@@ -61,6 +61,7 @@ type createMemoRequest struct {
 	Visibility  string          `json:"visibility"`
 	Tags        []string        `json:"tags,omitempty"`
 	Attachments []apiAttachment `json:"attachments"`
+	CreateTime  *string         `json:"createTime"`
 }
 
 type updateMemoRequest struct {

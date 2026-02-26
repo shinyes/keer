@@ -2,6 +2,7 @@ package http
 
 import (
 	"database/sql"
+	"errors"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
@@ -29,7 +30,7 @@ func AuthMiddleware(userService *service.UserService) fiber.Handler {
 		token := strings.TrimSpace(authz[len("Bearer "):])
 		user, err := userService.AuthenticateToken(c.Context(), token)
 		if err != nil {
-			if err == sql.ErrNoRows {
+			if errors.Is(err, sql.ErrNoRows) {
 				return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
 					"message": "invalid access token",
 				})

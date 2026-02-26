@@ -31,6 +31,7 @@ type CreateMemoInput struct {
 	Visibility      models.Visibility
 	Tags            []string
 	AttachmentNames []string
+	DisplayTime     *time.Time // 客户端指定的创建时间，为 nil 时使用当前时间
 }
 
 type UpdateMemoInput struct {
@@ -65,6 +66,11 @@ func (s *MemoService) CreateMemo(ctx context.Context, creatorID int64, input Cre
 		return MemoWithAttachments{}, err
 	}
 
+	displayTime := time.Now().UTC()
+	if input.DisplayTime != nil && !input.DisplayTime.IsZero() {
+		displayTime = input.DisplayTime.UTC()
+	}
+
 	memo, err := s.store.CreateMemoWithAttachments(
 		ctx,
 		creatorID,
@@ -73,7 +79,7 @@ func (s *MemoService) CreateMemo(ctx context.Context, creatorID int64, input Cre
 		models.MemoStateNormal,
 		false,
 		payload,
-		time.Now().UTC(),
+		displayTime,
 		attachmentIDs,
 	)
 	if err != nil {
@@ -189,7 +195,9 @@ func (s *MemoService) ListMemos(ctx context.Context, viewerID int64, state *mode
 		prefilter = filter.SQLPrefilter()
 	}
 
-	allVisible, err := s.store.ListVisibleMemos(ctx, viewerID, state, prefilter, 0, 0)
+	// 设置安全上限，避免一次性加载过多 memo 到内存
+	const maxMemoQueryLimit = 10000
+	allVisible, err := s.store.ListVisibleMemos(ctx, viewerID, state, prefilter, maxMemoQueryLimit, 0)
 	if err != nil {
 		return nil, "", err
 	}

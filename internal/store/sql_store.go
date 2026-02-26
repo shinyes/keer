@@ -553,8 +553,18 @@ func (s *SQLStore) UpdateMemoWithAttachments(ctx context.Context, memoID int64, 
 }
 
 func (s *SQLStore) DeleteMemo(ctx context.Context, memoID int64) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM memos WHERE id = ?`, memoID)
-	return err
+	res, err := s.db.ExecContext(ctx, `DELETE FROM memos WHERE id = ?`, memoID)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 func (s *SQLStore) ListVisibleMemos(ctx context.Context, viewerID int64, state *models.MemoState, prefilter MemoSQLPrefilter, limit int, offset int) ([]models.Memo, error) {

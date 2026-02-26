@@ -27,7 +27,9 @@ func NewRouter(cfg config.Config, userService *service.UserService, memoService 
 		BodyLimit: bodyLimit,
 	})
 	app.Use(httpAccessLogMiddleware())
-	app.Use(cors.New())
+	app.Use(cors.New(cors.Config{
+		AllowOrigins: cfg.BaseURL,
+	}))
 
 	buildAPIAttachment := func(attachment models.Attachment, memoName string) apiAttachment {
 		return toAPIAttachment(attachment, memoName, "", "")
@@ -133,6 +135,7 @@ func NewRouter(cfg config.Config, userService *service.UserService, memoService 
 	})
 
 	api.Get("/users/:name/settings/GENERAL", func(c *fiber.Ctx) error {
+		currentUser := CurrentUser(c)
 		name := strings.TrimSpace(c.Params("name"))
 		if name == "" {
 			return badRequest(c, "invalid user name")
@@ -143,6 +146,9 @@ func NewRouter(cfg config.Config, userService *service.UserService, memoService 
 				return notFound(c, "user not found")
 			}
 			return internalError(c, err)
+		}
+		if user.ID != currentUser.ID {
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"message": "forbidden"})
 		}
 		return c.JSON(userSettingResponse{
 			GeneralSetting: generalSetting{
@@ -236,6 +242,12 @@ func NewRouter(cfg config.Config, userService *service.UserService, memoService 
 		if req.Visibility == "" {
 			visibility = currentUser.DefaultVisibility
 		}
+		var displayTime *time.Time
+		if req.CreateTime != nil {
+			if t, err := time.Parse(time.RFC3339Nano, *req.CreateTime); err == nil {
+				displayTime = &t
+			}
+		}
 		created, err := memoService.CreateMemo(
 			c.Context(),
 			currentUser.ID,
@@ -244,6 +256,7 @@ func NewRouter(cfg config.Config, userService *service.UserService, memoService 
 				Visibility:      visibility,
 				Tags:            req.Tags,
 				AttachmentNames: attachmentNames,
+				DisplayTime:     displayTime,
 			},
 		)
 		if err != nil {
