@@ -11,7 +11,10 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/compress"
 	"github.com/gofiber/fiber/v2/middleware/cors"
+	"github.com/gofiber/fiber/v2/middleware/recover"
+	"github.com/gofiber/fiber/v2/middleware/requestid"
 
 	"github.com/shinyes/keer/internal/config"
 	"github.com/shinyes/keer/internal/models"
@@ -26,9 +29,19 @@ func NewRouter(cfg config.Config, userService *service.UserService, memoService 
 	app := fiber.New(fiber.Config{
 		BodyLimit: bodyLimit,
 	})
+	app.Use(recover.New())
+	app.Use(requestid.New(requestid.Config{
+		Header: "X-Request-ID",
+	}))
 	app.Use(httpAccessLogMiddleware())
 	app.Use(cors.New(cors.Config{
 		AllowOrigins: cfg.BaseURL,
+	}))
+	app.Use(compress.New(compress.Config{
+		Level: compress.LevelBestSpeed,
+		Next: func(c *fiber.Ctx) bool {
+			return strings.HasPrefix(c.Path(), "/file/")
+		},
 	}))
 
 	buildAPIAttachment := func(attachment models.Attachment, memoName string) apiAttachment {
@@ -775,7 +788,7 @@ func httpAccessLogMiddleware() fiber.Handler {
 		if path == "" {
 			path = c.Path()
 		}
-		log.Printf("http request method=%s path=%s status=%d duration=%s ip=%s", c.Method(), path, status, time.Since(startedAt).Round(time.Millisecond), c.IP())
+		log.Printf("http request method=%s path=%s status=%d duration=%s ip=%s request_id=%s", c.Method(), path, status, time.Since(startedAt).Round(time.Millisecond), c.IP(), requestID(c))
 		return err
 	}
 }
@@ -971,22 +984,36 @@ func parseSingleByteRange(raw string, size int64) (start int64, end int64, hasRa
 }
 
 func badRequest(c *fiber.Ctx, message string) error {
-	return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-		"message": message,
-	})
+	return writeError(c, fiber.StatusBadRequest, "BAD_REQUEST", message)
 }
 
 func notFound(c *fiber.Ctx, message string) error {
-	return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
-		"message": message,
-	})
+	return writeError(c, fiber.StatusNotFound, "NOT_FOUND", message)
 }
 
 func internalError(c *fiber.Ctx, err error) error {
-	log.Printf("internal error method=%s path=%s err=%v", c.Method(), c.Path(), err)
-	return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-		"message": "internal server error",
+	log.Printf("internal error method=%s path=%s request_id=%s err=%v", c.Method(), c.Path(), requestID(c), err)
+	return writeError(c, fiber.StatusInternalServerError, "INTERNAL_ERROR", "internal server error")
+}
+
+func writeError(c *fiber.Ctx, status int, code string, message string) error {
+	return c.Status(status).JSON(fiber.Map{
+		"code":      code,
+		"message":   message,
+		"requestId": requestID(c),
 	})
+}
+
+func requestID(c *fiber.Ctx) string {
+	if id := strings.TrimSpace(c.GetRespHeader("X-Request-ID")); id != "" {
+		return id
+	}
+	if raw := c.Locals("requestid"); raw != nil {
+		if id, ok := raw.(string); ok && strings.TrimSpace(id) != "" {
+			return strings.TrimSpace(id)
+		}
+	}
+	return ""
 }
 
 func inlineContentDisposition(filename string) string {

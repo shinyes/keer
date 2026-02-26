@@ -17,27 +17,19 @@ func AuthMiddleware(userService *service.UserService) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		authz := strings.TrimSpace(c.Get("Authorization"))
 		if authz == "" {
-			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-				"message": "missing authorization",
-			})
+			return writeError(c, fiber.StatusUnauthorized, "UNAUTHORIZED", "missing authorization")
 		}
 
 		if !strings.HasPrefix(strings.ToLower(authz), "bearer ") {
-			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-				"message": "invalid authorization header",
-			})
+			return writeError(c, fiber.StatusUnauthorized, "UNAUTHORIZED", "invalid authorization header")
 		}
 		token := strings.TrimSpace(authz[len("Bearer "):])
 		user, err := userService.AuthenticateToken(c.Context(), token)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-					"message": "invalid access token",
-				})
+				return writeError(c, fiber.StatusUnauthorized, "UNAUTHORIZED", "invalid access token")
 			}
-			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-				"message": "failed to authenticate",
-			})
+			return writeError(c, fiber.StatusInternalServerError, "INTERNAL_ERROR", "failed to authenticate")
 		}
 		c.Locals(currentUserKey, user)
 		return c.Next()
