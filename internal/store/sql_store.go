@@ -44,10 +44,11 @@ func (s *SQLStore) CreateUserWithProfile(ctx context.Context, username string, d
 	now := time.Now().UTC()
 	res, err := s.db.ExecContext(
 		ctx,
-		`INSERT INTO users (username, display_name, password_hash, role, default_visibility, create_time, update_time)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO users (username, display_name, avatar_url, password_hash, role, default_visibility, create_time, update_time)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		username,
 		displayName,
+		"",
 		passwordHash,
 		role,
 		models.VisibilityPrivate,
@@ -71,7 +72,7 @@ func (s *SQLStore) GetUserByID(ctx context.Context, id int64) (models.User, erro
 	var updateTime string
 	err := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, username, display_name, password_hash, role, default_visibility, create_time, update_time
+		`SELECT id, username, display_name, avatar_url, password_hash, role, default_visibility, create_time, update_time
 		FROM users
 		WHERE id = ?`,
 		id,
@@ -79,6 +80,7 @@ func (s *SQLStore) GetUserByID(ctx context.Context, id int64) (models.User, erro
 		&user.ID,
 		&user.Username,
 		&user.DisplayName,
+		&user.AvatarURL,
 		&user.PasswordHash,
 		&user.Role,
 		&defaultVisibility,
@@ -107,7 +109,7 @@ func (s *SQLStore) GetUserByUsername(ctx context.Context, username string) (mode
 	var updateTime string
 	err := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, username, display_name, password_hash, role, default_visibility, create_time, update_time
+		`SELECT id, username, display_name, avatar_url, password_hash, role, default_visibility, create_time, update_time
 		FROM users
 		WHERE username = ? COLLATE NOCASE`,
 		username,
@@ -115,6 +117,7 @@ func (s *SQLStore) GetUserByUsername(ctx context.Context, username string) (mode
 		&user.ID,
 		&user.Username,
 		&user.DisplayName,
+		&user.AvatarURL,
 		&user.PasswordHash,
 		&user.Role,
 		&defaultVisibility,
@@ -311,7 +314,7 @@ func (s *SQLStore) GetUserByToken(ctx context.Context, rawToken string) (models.
 	err := s.db.QueryRowContext(
 		ctx,
 		`SELECT
-			u.id, u.username, u.display_name, u.password_hash, u.role, u.default_visibility, u.create_time, u.update_time,
+			u.id, u.username, u.display_name, u.avatar_url, u.password_hash, u.role, u.default_visibility, u.create_time, u.update_time,
 			t.id, t.user_id, t.token_prefix, t.token_hash, t.description, t.created_at, t.last_used_at, t.expires_at, t.revoked_at
 		FROM personal_access_tokens t
 		JOIN users u ON u.id = t.user_id
@@ -324,6 +327,7 @@ func (s *SQLStore) GetUserByToken(ctx context.Context, rawToken string) (models.
 		&user.ID,
 		&user.Username,
 		&user.DisplayName,
+		&user.AvatarURL,
 		&user.PasswordHash,
 		&user.Role,
 		&defaultVisibility,
@@ -370,6 +374,22 @@ func (s *SQLStore) GetUserByToken(ctx context.Context, rawToken string) (models.
 		return models.User{}, models.PersonalAccessToken{}, errParse
 	}
 	return user, token, nil
+}
+
+func (s *SQLStore) UpdateUserAvatar(ctx context.Context, userID int64, avatarURL string) (models.User, error) {
+	_, err := s.db.ExecContext(
+		ctx,
+		`UPDATE users
+		SET avatar_url = ?, update_time = ?
+		WHERE id = ?`,
+		avatarURL,
+		time.Now().UTC().Format(time.RFC3339Nano),
+		userID,
+	)
+	if err != nil {
+		return models.User{}, err
+	}
+	return s.GetUserByID(ctx, userID)
 }
 
 func (s *SQLStore) CountUsers(ctx context.Context) (int64, error) {

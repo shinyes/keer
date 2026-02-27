@@ -11,6 +11,7 @@ func Migrate(db *sql.DB) error {
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			username TEXT NOT NULL UNIQUE COLLATE NOCASE,
 			display_name TEXT NOT NULL,
+			avatar_url TEXT NOT NULL DEFAULT '',
 			email TEXT NOT NULL DEFAULT '',
 			password_hash TEXT NOT NULL DEFAULT '',
 			role TEXT NOT NULL DEFAULT 'USER',
@@ -133,6 +134,14 @@ func Migrate(db *sql.DB) error {
 		}
 	}
 
+	if err := ensureColumn(
+		db,
+		"users",
+		"avatar_url",
+		"TEXT NOT NULL DEFAULT ''",
+	); err != nil {
+		return fmt.Errorf("migration failed: %w", err)
+	}
 	if err := ensureColumn(
 		db,
 		"attachment_upload_sessions",

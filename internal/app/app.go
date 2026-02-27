@@ -79,6 +79,7 @@ func Build(ctx context.Context, cfg config.Config) (*Container, func() error, er
 	}
 
 	attachmentService := service.NewAttachmentService(sqlStore, fileStorage)
+	userService.SetAvatarStorage(fileStorage)
 	_ = attachmentService.CleanupExpiredUploadSessions(ctx)
 	router := httpserver.NewRouter(cfg, userService, memoService, attachmentService)
 

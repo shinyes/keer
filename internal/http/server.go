@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"mime"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -205,6 +206,54 @@ func NewRouter(cfg config.Config, userService *service.UserService, memoService 
 			return internalError(c, err)
 		}
 		return c.JSON(toAPIUser(user))
+	})
+
+	api.Patch("/users/:name", func(c *fiber.Ctx) error {
+		currentUser := CurrentUser(c)
+		name := strings.TrimSpace(c.Params("name"))
+		if name == "" {
+			return badRequest(c, "invalid user name")
+		}
+		targetUser, err := userService.GetUserByIdentifier(c.Context(), name)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return notFound(c, "user not found")
+			}
+			return internalError(c, err)
+		}
+		if targetUser.ID != currentUser.ID {
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"message": "forbidden"})
+		}
+
+		var req updateUserRequest
+		if err := c.BodyParser(&req); err != nil {
+			return badRequest(c, "invalid request body")
+		}
+		if req.User.Avatar != nil && req.User.AvatarURL != nil {
+			return badRequest(c, "avatar and avatarUrl cannot both be set")
+		}
+		var updatedUser models.User
+		switch {
+		case req.User.Avatar != nil:
+			updatedUser, err = userService.UpdateUserAvatarThumbnail(
+				c.Context(),
+				targetUser.ID,
+				req.User.Avatar.Content,
+				req.User.Avatar.Type,
+			)
+		case req.User.AvatarURL != nil:
+			if strings.TrimSpace(*req.User.AvatarURL) == "" {
+				updatedUser, err = userService.ClearUserAvatar(c.Context(), targetUser.ID)
+			} else {
+				return badRequest(c, "avatarUrl update is not supported; use avatar content upload")
+			}
+		default:
+			return badRequest(c, "avatar or avatarUrl is required")
+		}
+		if err != nil {
+			return badRequest(c, err.Error())
+		}
+		return c.JSON(toAPIUser(updatedUser))
 	})
 
 	api.Get("/memos", func(c *fiber.Ctx) error {
@@ -705,6 +754,45 @@ func NewRouter(cfg config.Config, userService *service.UserService, memoService 
 		return c.SendStream(thumbnailStream)
 	})
 
+	app.Get("/file/avatars/:id", AuthMiddleware(userService), func(c *fiber.Ctx) error {
+		currentUser := CurrentUser(c)
+		userID, err := parseID(c.Params("id"))
+		if err != nil {
+			return badRequest(c, "invalid user id")
+		}
+		if userID != currentUser.ID {
+			return c.SendStatus(fiber.StatusForbidden)
+		}
+
+		user, err := userService.GetUser(c.Context(), userID)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return notFound(c, "user not found")
+			}
+			return internalError(c, err)
+		}
+		if strings.TrimSpace(user.AvatarURL) == "" {
+			return notFound(c, "avatar not found")
+		}
+
+		if directURL, ok, err := userService.PresignUserAvatarURL(c.Context(), userID); err != nil {
+			return internalError(c, err)
+		} else if ok {
+			return c.Redirect(directURL, fiber.StatusTemporaryRedirect)
+		}
+
+		avatarStream, err := userService.OpenUserAvatarStream(c.Context(), userID)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return notFound(c, "avatar not found")
+			}
+			return internalError(c, err)
+		}
+		c.Set(fiber.HeaderContentType, "image/jpeg")
+		c.Set(fiber.HeaderContentDisposition, inlineContentDisposition(fmt.Sprintf("%d.jpg", userID)))
+		return c.SendStream(avatarStream)
+	})
+
 	app.Get("/file/attachments/:id/:filename", AuthMiddleware(userService), func(c *fiber.Ctx) error {
 		currentUser := CurrentUser(c)
 		attachmentID, err := parseID(c.Params("id"))
@@ -811,6 +899,7 @@ func toAPIUser(user models.User) apiUser {
 		Role:        role,
 		Username:    user.Username,
 		DisplayName: user.DisplayName,
+		AvatarURL:   user.AvatarURL,
 		State:       "NORMAL",
 		CreateTime:  formatMaybeTime(user.CreateTime),
 		UpdateTime:  formatMaybeTime(user.UpdateTime),

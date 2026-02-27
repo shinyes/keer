@@ -32,6 +32,20 @@ type createUserRequest struct {
 	RequestID    string         `json:"requestId"`
 }
 
+type updateUserRequest struct {
+	User updateUserBody `json:"user"`
+}
+
+type updateUserBody struct {
+	AvatarURL *string                 `json:"avatarUrl"`
+	Avatar    *updateUserAvatarUpload `json:"avatar"`
+}
+
+type updateUserAvatarUpload struct {
+	Content string `json:"content"`
+	Type    string `json:"type,omitempty"`
+}
+
 type createUserBody struct {
 	Name        string `json:"name"`
 	Role        string `json:"role"`
