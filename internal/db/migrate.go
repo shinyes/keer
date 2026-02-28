@@ -51,8 +51,95 @@ func Migrate(db *sql.DB) error {
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_memos_creator ON memos(creator_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_memos_state ON memos(state);`,
-		`CREATE INDEX IF NOT EXISTS idx_memos_has_task_list ON memos(has_task_list);`,
-		`CREATE INDEX IF NOT EXISTS idx_memos_has_incomplete_tasks ON memos(has_incomplete_tasks);`,
+		`CREATE INDEX IF NOT EXISTS idx_memos_update_time_id ON memos(update_time, id);`,
+		`CREATE INDEX IF NOT EXISTS idx_memos_state_update_time_id ON memos(state, update_time, id);`,
+		`CREATE TABLE IF NOT EXISTS memo_tombstones (
+			memo_id INTEGER PRIMARY KEY,
+			memo_name TEXT NOT NULL,
+			creator_id INTEGER NOT NULL,
+			deleted_time TEXT NOT NULL,
+			FOREIGN KEY(creator_id) REFERENCES users(id) ON DELETE CASCADE
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_memo_tombstones_creator_deleted_time ON memo_tombstones(creator_id, deleted_time DESC);`,
+		`CREATE INDEX IF NOT EXISTS idx_memo_tombstones_deleted_time ON memo_tombstones(deleted_time DESC);`,
+		`CREATE TABLE IF NOT EXISTS memo_tombstone_collaborators (
+			memo_id INTEGER NOT NULL,
+			collaborator_id INTEGER NOT NULL,
+			PRIMARY KEY(memo_id, collaborator_id),
+			FOREIGN KEY(memo_id) REFERENCES memo_tombstones(memo_id) ON DELETE CASCADE,
+			FOREIGN KEY(collaborator_id) REFERENCES users(id) ON DELETE CASCADE
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_memo_tombstone_collaborators_user ON memo_tombstone_collaborators(collaborator_id, memo_id);`,
+		`CREATE TABLE IF NOT EXISTS memo_change_events (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			memo_id INTEGER NOT NULL,
+			memo_name TEXT NOT NULL,
+			creator_id INTEGER NOT NULL,
+			event_type TEXT NOT NULL,
+			event_time TEXT NOT NULL,
+			FOREIGN KEY(creator_id) REFERENCES users(id) ON DELETE CASCADE
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_memo_change_events_event_time ON memo_change_events(event_time ASC, id ASC);`,
+		`CREATE INDEX IF NOT EXISTS idx_memo_change_events_memo_id ON memo_change_events(memo_id, event_time DESC);`,
+		`CREATE TABLE IF NOT EXISTS memo_change_event_recipients (
+			event_id INTEGER NOT NULL,
+			user_id INTEGER NOT NULL,
+			PRIMARY KEY(event_id, user_id),
+			FOREIGN KEY(event_id) REFERENCES memo_change_events(id) ON DELETE CASCADE,
+			FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_memo_change_event_recipients_user ON memo_change_event_recipients(user_id, event_id);`,
+		`CREATE TABLE IF NOT EXISTS groups (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL,
+			description TEXT NOT NULL DEFAULT '',
+			creator_id INTEGER NOT NULL,
+			create_time TEXT NOT NULL,
+			update_time TEXT NOT NULL,
+			FOREIGN KEY(creator_id) REFERENCES users(id) ON DELETE CASCADE
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_groups_creator ON groups(creator_id);`,
+		`CREATE TABLE IF NOT EXISTS group_members (
+			group_id INTEGER NOT NULL,
+			user_id INTEGER NOT NULL,
+			join_time TEXT NOT NULL,
+			PRIMARY KEY(group_id, user_id),
+			FOREIGN KEY(group_id) REFERENCES groups(id) ON DELETE CASCADE,
+			FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_group_members_user ON group_members(user_id);`,
+		`CREATE TABLE IF NOT EXISTS group_tags (
+			group_id INTEGER NOT NULL,
+			name TEXT NOT NULL,
+			creator_id INTEGER NOT NULL,
+			create_time TEXT NOT NULL,
+			update_time TEXT NOT NULL,
+			PRIMARY KEY(group_id, name),
+			FOREIGN KEY(group_id) REFERENCES groups(id) ON DELETE CASCADE,
+			FOREIGN KEY(creator_id) REFERENCES users(id) ON DELETE CASCADE
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_group_tags_group_update ON group_tags(group_id, update_time DESC);`,
+		`CREATE TABLE IF NOT EXISTS group_messages (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			group_id INTEGER NOT NULL,
+			creator_id INTEGER NOT NULL,
+			content TEXT NOT NULL,
+			create_time TEXT NOT NULL,
+			update_time TEXT NOT NULL,
+			FOREIGN KEY(group_id) REFERENCES groups(id) ON DELETE CASCADE,
+			FOREIGN KEY(creator_id) REFERENCES users(id) ON DELETE CASCADE
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_group_messages_group_time ON group_messages(group_id, create_time ASC, id ASC);`,
+		`CREATE TABLE IF NOT EXISTS group_message_tags (
+			message_id INTEGER NOT NULL,
+			group_id INTEGER NOT NULL,
+			tag_name TEXT NOT NULL,
+			create_time TEXT NOT NULL,
+			PRIMARY KEY(message_id, tag_name),
+			FOREIGN KEY(message_id) REFERENCES group_messages(id) ON DELETE CASCADE,
+			FOREIGN KEY(group_id, tag_name) REFERENCES group_tags(group_id, name) ON DELETE CASCADE
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_group_message_tags_group_tag ON group_message_tags(group_id, tag_name);`,
 		`CREATE TABLE IF NOT EXISTS tags (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			creator_id INTEGER NOT NULL,
@@ -212,6 +299,12 @@ func Migrate(db *sql.DB) error {
 		"has_incomplete_tasks",
 		"INTEGER NOT NULL DEFAULT 0",
 	); err != nil {
+		return fmt.Errorf("migration failed: %w", err)
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_memos_has_task_list ON memos(has_task_list)`); err != nil {
+		return fmt.Errorf("migration failed: %w", err)
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_memos_has_incomplete_tasks ON memos(has_incomplete_tasks)`); err != nil {
 		return fmt.Errorf("migration failed: %w", err)
 	}
 	hasPayloadJSON, err := hasColumn(db, "memos", "payload_json")

@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -35,6 +36,16 @@ type MemoUpdate struct {
 	Longitude    *float64
 	Payload      *models.MemoPayload
 }
+
+type MemoQueryBounds struct {
+	UpdatedAfter         *time.Time
+	UpdatedBeforeOrEqual *time.Time
+}
+
+const (
+	memoChangeEventTypeDelete            = "DELETE"
+	memoChangeEventTypeVisibilityRevoked = "VISIBILITY_REVOKED"
+)
 
 func (s *SQLStore) CreateUser(ctx context.Context, username string, displayName string, role string) (models.User, error) {
 	return s.CreateUserWithProfile(ctx, username, displayName, "", role)
@@ -514,6 +525,19 @@ func (s *SQLStore) UpdateMemoWithAttachments(ctx context.Context, memoID int64, 
 	}
 	defer tx.Rollback() //nolint:errcheck
 
+	var creatorID int64
+	var previousCollaboratorIDs map[int64]struct{}
+	if update.Payload != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT creator_id FROM memos WHERE id = ?`, memoID).Scan(&creatorID); err != nil {
+			return models.Memo{}, err
+		}
+		previousTags, err := listMemoTagNamesInTx(ctx, tx, memoID)
+		if err != nil {
+			return models.Memo{}, err
+		}
+		previousCollaboratorIDs = collaboratorIDSetFromTags(previousTags)
+	}
+
 	assignments := make([]string, 0, 8)
 	args := make([]any, 0, 8)
 
@@ -579,11 +603,29 @@ func (s *SQLStore) UpdateMemoWithAttachments(ctx context.Context, memoID int64, 
 		}
 	}
 	if update.Payload != nil {
-		var creatorID int64
-		if err := tx.QueryRowContext(ctx, `SELECT creator_id FROM memos WHERE id = ?`, memoID).Scan(&creatorID); err != nil {
+		if err := setMemoTagsInTx(ctx, tx, creatorID, memoID, update.Payload.Tags); err != nil {
 			return models.Memo{}, err
 		}
-		if err := setMemoTagsInTx(ctx, tx, creatorID, memoID, update.Payload.Tags); err != nil {
+		currentCollaboratorIDs := collaboratorIDSetFromTags(update.Payload.Tags)
+		revokedRecipientIDs := make([]int64, 0)
+		for collaboratorID := range previousCollaboratorIDs {
+			if collaboratorID == creatorID {
+				continue
+			}
+			if _, stillCollaborator := currentCollaboratorIDs[collaboratorID]; stillCollaborator {
+				continue
+			}
+			revokedRecipientIDs = append(revokedRecipientIDs, collaboratorID)
+		}
+		if err := appendMemoChangeEventInTx(
+			ctx,
+			tx,
+			memoID,
+			creatorID,
+			memoChangeEventTypeVisibilityRevoked,
+			revokedRecipientIDs,
+			time.Now().UTC(),
+		); err != nil {
 			return models.Memo{}, err
 		}
 	}
@@ -595,7 +637,45 @@ func (s *SQLStore) UpdateMemoWithAttachments(ctx context.Context, memoID int64, 
 }
 
 func (s *SQLStore) DeleteMemo(ctx context.Context, memoID int64) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM memos WHERE id = ?`, memoID)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	var creatorID int64
+	if err := tx.QueryRowContext(ctx, `SELECT creator_id FROM memos WHERE id = ?`, memoID).Scan(&creatorID); err != nil {
+		if err == sql.ErrNoRows {
+			return sql.ErrNoRows
+		}
+		return err
+	}
+	tagNames, err := listMemoTagNamesInTx(ctx, tx, memoID)
+	if err != nil {
+		return err
+	}
+	collaboratorIDs := collaboratorIDSetFromTags(tagNames)
+	recipientIDs := make([]int64, 0, len(collaboratorIDs)+1)
+	recipientIDs = append(recipientIDs, creatorID)
+	for collaboratorID := range collaboratorIDs {
+		if collaboratorID == creatorID {
+			continue
+		}
+		recipientIDs = append(recipientIDs, collaboratorID)
+	}
+	if err := appendMemoChangeEventInTx(
+		ctx,
+		tx,
+		memoID,
+		creatorID,
+		memoChangeEventTypeDelete,
+		recipientIDs,
+		time.Now().UTC(),
+	); err != nil {
+		return err
+	}
+
+	res, err := tx.ExecContext(ctx, `DELETE FROM memos WHERE id = ?`, memoID)
 	if err != nil {
 		return err
 	}
@@ -606,22 +686,49 @@ func (s *SQLStore) DeleteMemo(ctx context.Context, memoID int64) error {
 	if affected == 0 {
 		return sql.ErrNoRows
 	}
-	return nil
+
+	return tx.Commit()
 }
 
-func (s *SQLStore) ListVisibleMemos(ctx context.Context, viewerID int64, state *models.MemoState, prefilter MemoSQLPrefilter, limit int, offset int) ([]models.Memo, error) {
+func (s *SQLStore) ListVisibleMemos(
+	ctx context.Context,
+	viewerID int64,
+	state *models.MemoState,
+	prefilter MemoSQLPrefilter,
+	limit int,
+	offset int,
+	bounds *MemoQueryBounds,
+) ([]models.Memo, error) {
 	if prefilter.Unsatisfiable {
 		return []models.Memo{}, nil
 	}
 
+	collaboratorTag := fmt.Sprintf("collab/%d", viewerID)
 	query := `SELECT m.id, m.creator_id, m.content, m.visibility, m.state, m.pinned, m.create_time, m.update_time, m.display_time, m.latitude, m.longitude, m.has_link, m.has_task_list, m.has_code, m.has_incomplete_tasks
 		FROM memos m
-		WHERE (m.creator_id = ? OR m.visibility IN ('PUBLIC', 'PROTECTED'))`
-	args := []any{viewerID}
+		WHERE (
+			m.creator_id = ?
+			OR m.visibility IN ('PUBLIC', 'PROTECTED')
+			OR EXISTS (
+				SELECT 1
+				FROM memo_tags mt
+				JOIN tags t ON t.id = mt.tag_id
+				WHERE mt.memo_id = m.id AND t.name = ?
+			)
+		)`
+	args := []any{viewerID, collaboratorTag}
 
 	if state != nil {
 		query += ` AND m.state = ?`
 		args = append(args, *state)
+	}
+	if bounds != nil && bounds.UpdatedAfter != nil {
+		query += ` AND m.update_time > ?`
+		args = append(args, bounds.UpdatedAfter.UTC().Format(time.RFC3339Nano))
+	}
+	if bounds != nil && bounds.UpdatedBeforeOrEqual != nil {
+		query += ` AND m.update_time <= ?`
+		args = append(args, bounds.UpdatedBeforeOrEqual.UTC().Format(time.RFC3339Nano))
 	}
 
 	if len(prefilter.CreatorIDs) > 0 {
@@ -716,7 +823,11 @@ func (s *SQLStore) ListVisibleMemos(ctx context.Context, viewerID int64, state *
 		query += strings.Join(groupClauses, " OR ") + `)`
 	}
 
-	query += ` ORDER BY m.create_time DESC, m.id DESC`
+	if bounds != nil && (bounds.UpdatedAfter != nil || bounds.UpdatedBeforeOrEqual != nil) {
+		query += ` ORDER BY m.update_time ASC, m.id ASC`
+	} else {
+		query += ` ORDER BY m.create_time DESC, m.id DESC`
+	}
 	if limit > 0 {
 		query += ` LIMIT ? OFFSET ?`
 		args = append(args, limit, offset)
@@ -745,13 +856,70 @@ func (s *SQLStore) ListVisibleMemos(ctx context.Context, viewerID int64, state *
 	return memos, nil
 }
 
+func (s *SQLStore) ListDeletedVisibleMemoNames(
+	ctx context.Context,
+	viewerID int64,
+	deletedAfter time.Time,
+	deletedBeforeOrEqual time.Time,
+	limit int,
+) ([]string, error) {
+	query := `SELECT DISTINCT mce.memo_name
+		FROM memo_change_events mce
+		JOIN memo_change_event_recipients mcer ON mcer.event_id = mce.id
+		WHERE mce.event_time > ?
+			AND mce.event_time <= ?
+			AND mcer.user_id = ?
+			AND mce.event_type IN (?, ?)
+		ORDER BY mce.event_time ASC, mce.id ASC`
+	args := []any{
+		deletedAfter.UTC().Format(time.RFC3339Nano),
+		deletedBeforeOrEqual.UTC().Format(time.RFC3339Nano),
+		viewerID,
+		memoChangeEventTypeDelete,
+		memoChangeEventTypeVisibilityRevoked,
+	}
+	if limit > 0 {
+		query += ` LIMIT ?`
+		args = append(args, limit)
+	}
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make([]string, 0)
+	for rows.Next() {
+		var memoName string
+		if err := rows.Scan(&memoName); err != nil {
+			return nil, err
+		}
+		result = append(result, memoName)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 func (s *SQLStore) ListVisibleMemosByCreator(ctx context.Context, creatorID int64, viewerID int64, state models.MemoState) ([]models.Memo, error) {
 	query := `SELECT id, creator_id, content, visibility, state, pinned, create_time, update_time, display_time, latitude, longitude, has_link, has_task_list, has_code, has_incomplete_tasks
 		FROM memos
 		WHERE creator_id = ? AND state = ?`
 	args := []any{creatorID, state}
 	if creatorID != viewerID {
-		query += ` AND visibility IN ('PUBLIC', 'PROTECTED')`
+		collaboratorTag := fmt.Sprintf("collab/%d", viewerID)
+		query += ` AND (
+			visibility IN ('PUBLIC', 'PROTECTED')
+			OR EXISTS (
+				SELECT 1
+				FROM memo_tags mt
+				JOIN tags t ON t.id = mt.tag_id
+				WHERE mt.memo_id = memos.id AND t.name = ?
+			)
+		)`
+		args = append(args, collaboratorTag)
 	}
 	query += ` ORDER BY create_time DESC, id DESC`
 
@@ -1339,6 +1507,107 @@ func setMemoTagsInTx(ctx context.Context, tx *sql.Tx, creatorID int64, memoID in
 	return err
 }
 
+func listMemoTagNamesInTx(ctx context.Context, tx *sql.Tx, memoID int64) ([]string, error) {
+	rows, err := tx.QueryContext(
+		ctx,
+		`SELECT t.name
+		FROM memo_tags mt
+		JOIN tags t ON t.id = mt.tag_id
+		WHERE mt.memo_id = ?`,
+		memoID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	tags := make([]string, 0)
+	for rows.Next() {
+		var tag string
+		if err := rows.Scan(&tag); err != nil {
+			return nil, err
+		}
+		tags = append(tags, tag)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return tags, nil
+}
+
+func collaboratorIDSetFromTags(tags []string) map[int64]struct{} {
+	result := make(map[int64]struct{})
+	for _, tag := range tags {
+		collaboratorID, ok := collaboratorIDFromTag(tag)
+		if !ok {
+			continue
+		}
+		result[collaboratorID] = struct{}{}
+	}
+	return result
+}
+
+func appendMemoChangeEventInTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	memoID int64,
+	creatorID int64,
+	eventType string,
+	recipientIDs []int64,
+	eventTime time.Time,
+) error {
+	if len(recipientIDs) == 0 {
+		return nil
+	}
+
+	dedupedRecipients := make([]int64, 0, len(recipientIDs))
+	seen := make(map[int64]struct{}, len(recipientIDs))
+	for _, recipientID := range recipientIDs {
+		if recipientID <= 0 {
+			continue
+		}
+		if _, exists := seen[recipientID]; exists {
+			continue
+		}
+		seen[recipientID] = struct{}{}
+		dedupedRecipients = append(dedupedRecipients, recipientID)
+	}
+	if len(dedupedRecipients) == 0 {
+		return nil
+	}
+
+	memoName := "memos/" + models.Int64ToString(memoID)
+	res, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO memo_change_events (memo_id, memo_name, creator_id, event_type, event_time)
+		VALUES (?, ?, ?, ?, ?)`,
+		memoID,
+		memoName,
+		creatorID,
+		eventType,
+		eventTime.UTC().Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return err
+	}
+	eventID, err := res.LastInsertId()
+	if err != nil {
+		return err
+	}
+
+	for _, recipientID := range dedupedRecipients {
+		if _, err := tx.ExecContext(
+			ctx,
+			`INSERT INTO memo_change_event_recipients (event_id, user_id) VALUES (?, ?)`,
+			eventID,
+			recipientID,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *SQLStore) ListAttachmentsByMemoIDs(ctx context.Context, memoIDs []int64) (map[int64][]models.Attachment, error) {
 	result := make(map[int64][]models.Attachment)
 	if len(memoIDs) == 0 {
@@ -1624,6 +1893,23 @@ func parseNullableTime(raw sql.NullString) (*time.Time, error) {
 		return nil, err
 	}
 	return &t, nil
+}
+
+func collaboratorIDFromTag(tag string) (int64, bool) {
+	tag = strings.TrimSpace(tag)
+	const prefix = "collab/"
+	if !strings.HasPrefix(tag, prefix) {
+		return 0, false
+	}
+	rawID := strings.TrimSpace(strings.TrimPrefix(tag, prefix))
+	if rawID == "" {
+		return 0, false
+	}
+	id, err := strconv.ParseInt(rawID, 10, 64)
+	if err != nil || id <= 0 {
+		return 0, false
+	}
+	return id, true
 }
 
 func HashToken(raw string) string {

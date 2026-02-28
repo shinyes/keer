@@ -6,9 +6,9 @@ GitHub: https://github.com/shinyes/keer
 
 当前已实现：
 
-- Markdown 标签解析（`goldmark + 自定义 inline parser`）
-- 服务端持久化 memo payload（`payload_json`，含 `tags` 与 `property`）
-- `getStats.tagCount` 基于 payload tags 统计
+- 后端仅做 memo 内容透传（不解析明文内容）
+- 标签与属性由客户端处理后上传，后端只持久化客户端提供的标签
+- `getStats.tagCount` 基于 memo tags 统计
 - `tag in ["..."]` 层级匹配（`book` 命中 `book` 和 `book/...`）
 - 完整 CEL 过滤表达式（含组合逻辑与宏）
 - `tags.exists(...)`
@@ -24,10 +24,10 @@ GitHub: https://github.com/shinyes/keer
 - API：覆盖 `MoeMemosAndroid` v1 联调所需关键接口
 - 存储：SQLite + 本地文件系统 / S3（二选一）
 - 鉴权：Bearer Token（个人访问令牌）
-- 标签：服务端解析与输出，不信任客户端 tags
+- 标签：由客户端处理并上传，后端仅透传/存储
 - 过滤：CEL 编译执行（含 tags.exists / `"x" in tags`）
 - 查询优化：CEL 条件安全下推到 SQL（命中已识别子表达式）
-- 运维：提供 payload 回填 CLI
+- 运维：提供运行时控制台与存储配置命令
 
 ## 环境要求
 
@@ -178,15 +178,15 @@ Content-Type: application/json
 
 ### 写入与更新
 
-- `POST /api/v1/memos`：服务端解析 `content` 并重建 payload
-- `PATCH /api/v1/memos/{id}` 且 `content` 变更：重建 payload
+- `POST /api/v1/memos`：后端不解析 `content`，直接存储并使用客户端传入 tags
+- `PATCH /api/v1/memos/{id}` 且 `content` 变更：后端不解析明文内容
 - `PATCH /api/v1/memos/{id}` 仅改可见性/置顶等：不重算 tags
-- 服务端不以客户端传入 tags 作为真实来源
+- 以后端持久化的 tags 为准（来源为客户端上传）
 - 兼容 memos 行为：允许空内容 memo（如“仅附件 memo”）
 
 ### 统计
 
-- `GET /api/v1/users/{name}:getStats` 的 `tagCount` 基于 `memo.payload_json.tags`
+- `GET /api/v1/users/{name}:getStats` 的 `tagCount` 基于 memo tags
 - 同一 memo 中重复标签只计一次（payload 已去重）
 - 统计时应用可见性规则
 
@@ -204,6 +204,7 @@ Content-Type: application/json
 
 - 为兼容旧语法，`tag in [...]` 会在服务端重写为 CEL 再执行。
 - 在执行 CEL 前，会先做一层 SQL 安全下推（不改变语义，只减少候选 memo）。
+- `content` / `property.*` 过滤表达式会被拒绝（后端不参与内容处理）。
 
 ### CEL 下推策略
 
@@ -214,17 +215,9 @@ Content-Type: application/json
 - `visibility == ...` / `visibility in [...]`
 - `state == ...` / `state in [...]`
 - `pinned == ...` / `pinned in [...]`
-- `property.hasLink == ...`
-- `property.hasTaskList == ...`
-- `property.hasCode == ...`
-- `property.hasIncompleteTasks == ...`
 - `pinned != ...`
 - `visibility != ...`
 - `state != ...`
-- `property.hasLink != ...`
-- `property.hasTaskList != ...`
-- `property.hasCode != ...`
-- `property.hasIncompleteTasks != ...`
 - `"x" in tags`
 - `!("x" in tags)`
 - `tags.exists(t, t.startsWith("prefix"))`
@@ -237,14 +230,6 @@ Content-Type: application/json
 
 - 示例：`creator_id == 1 || creator_id == 2` 可下推为 `creator_id in [1,2]`
 - 若某个 `||` 分支无法安全提取约束，则对应字段下推会自动放弃（不影响最终结果正确性）
-
-## 历史数据回填
-
-回填历史 memo 的 payload（tags + property）：
-
-```text
-memo rebuild-payload
-```
 
 ## 运维命令（后台管理）
 

@@ -74,6 +74,12 @@ type listMemosResponse struct {
 	NextPageToken string    `json:"nextPageToken,omitempty"`
 }
 
+type listMemoChangesResponse struct {
+	Memos            []apiMemo `json:"memos"`
+	DeletedMemoNames []string  `json:"deletedMemoNames"`
+	SyncAnchor       string    `json:"syncAnchor"`
+}
+
 type createMemoRequest struct {
 	Content     string          `json:"content"`
 	Visibility  string          `json:"visibility"`
@@ -108,6 +114,64 @@ type apiMemo struct {
 	Longitude   *float64        `json:"longitude,omitempty"`
 	Attachments []apiAttachment `json:"attachments,omitempty"`
 	Tags        []string        `json:"tags,omitempty"`
+}
+
+type listGroupsResponse struct {
+	Groups []apiGroup `json:"groups"`
+}
+
+type createGroupRequest struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+type updateGroupRequest struct {
+	Name        *string `json:"name"`
+	Description *string `json:"description"`
+}
+
+type apiGroupMember struct {
+	Name        string `json:"name"`
+	Username    string `json:"username"`
+	DisplayName string `json:"displayName,omitempty"`
+}
+
+type apiGroup struct {
+	Name        string           `json:"name"`
+	Creator     string           `json:"creator"`
+	CreateTime  string           `json:"createTime,omitempty"`
+	UpdateTime  string           `json:"updateTime,omitempty"`
+	GroupName   string           `json:"groupName"`
+	Description string           `json:"description,omitempty"`
+	Members     []apiGroupMember `json:"members,omitempty"`
+}
+
+type listGroupMessagesResponse struct {
+	Messages      []apiGroupMessage `json:"messages"`
+	NextPageToken string            `json:"nextPageToken,omitempty"`
+}
+
+type createGroupMessageRequest struct {
+	Content string   `json:"content"`
+	Tags    []string `json:"tags,omitempty"`
+}
+
+type apiGroupMessage struct {
+	Name       string   `json:"name"`
+	Group      string   `json:"group"`
+	Creator    string   `json:"creator"`
+	CreateTime string   `json:"createTime,omitempty"`
+	UpdateTime string   `json:"updateTime,omitempty"`
+	Content    string   `json:"content,omitempty"`
+	Tags       []string `json:"tags,omitempty"`
+}
+
+type listGroupTagsResponse struct {
+	Tags []string `json:"tags"`
+}
+
+type addGroupTagRequest struct {
+	Tag string `json:"tag"`
 }
 
 type createAttachmentRequest struct {

@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/shinyes/keer/internal/db"
-	"github.com/shinyes/keer/internal/markdown"
 	"github.com/shinyes/keer/internal/models"
 	"github.com/shinyes/keer/internal/store"
 )
@@ -30,10 +29,9 @@ func setupTestServices(t *testing.T) testServices {
 		t.Fatalf("Migrate() error = %v", err)
 	}
 	sqlStore := store.New(sqliteDB)
-	md := markdown.NewService()
 	return testServices{
 		store:       sqlStore,
-		memoService: NewMemoService(sqlStore, md),
+		memoService: NewMemoService(sqlStore),
 	}
 }
 

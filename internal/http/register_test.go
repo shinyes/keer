@@ -13,7 +13,6 @@ import (
 
 	"github.com/shinyes/keer/internal/config"
 	"github.com/shinyes/keer/internal/db"
-	"github.com/shinyes/keer/internal/markdown"
 	"github.com/shinyes/keer/internal/service"
 	"github.com/shinyes/keer/internal/storage"
 	"github.com/shinyes/keer/internal/store"
@@ -303,8 +302,8 @@ func newTestAppWithUserService(t *testing.T, allowRegistration bool, withBootstr
 			t.Fatalf("EnsureBootstrap() error = %v", err)
 		}
 	}
-	markdownSvc := markdown.NewService()
-	memoService := service.NewMemoService(sqlStore, markdownSvc)
+	memoService := service.NewMemoService(sqlStore)
+	groupService := service.NewGroupService(sqlStore)
 	localStore, err := storage.NewLocalStore(filepath.Join(t.TempDir(), "uploads"))
 	if err != nil {
 		t.Fatalf("NewLocalStore() error = %v", err)
@@ -315,5 +314,5 @@ func newTestAppWithUserService(t *testing.T, allowRegistration bool, withBootstr
 		KeerAPIVersion:    "0.1",
 		AllowRegistration: allowRegistration,
 	}
-	return NewRouter(cfg, userService, memoService, attachmentService), userService
+	return NewRouter(cfg, userService, memoService, groupService, attachmentService), userService
 }

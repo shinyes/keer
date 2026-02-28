@@ -78,6 +78,39 @@ type Memo struct {
 	Payload    MemoPayload
 }
 
+type Group struct {
+	ID          int64
+	GroupName   string
+	Description string
+	CreatorID   int64
+	CreateTime  time.Time
+	UpdateTime  time.Time
+}
+
+type GroupMember struct {
+	GroupID  int64
+	UserID   int64
+	JoinTime time.Time
+}
+
+type GroupTag struct {
+	GroupID    int64
+	Name       string
+	CreatorID  int64
+	CreateTime time.Time
+	UpdateTime time.Time
+}
+
+type GroupMessage struct {
+	ID         int64
+	GroupID    int64
+	CreatorID  int64
+	Content    string
+	CreateTime time.Time
+	UpdateTime time.Time
+	Tags       []string
+}
+
 type Attachment struct {
 	ID                   int64
 	CreatorID            int64
@@ -121,4 +154,12 @@ func (u User) Name() string {
 
 func Int64ToString(v int64) string {
 	return strconv.FormatInt(v, 10)
+}
+
+func (g Group) Name() string {
+	return "groups/" + Int64ToString(g.ID)
+}
+
+func (g GroupMessage) Name() string {
+	return "groups/" + Int64ToString(g.GroupID) + "/messages/" + Int64ToString(g.ID)
 }

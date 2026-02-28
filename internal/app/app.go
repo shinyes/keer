@@ -9,7 +9,6 @@ import (
 	"github.com/shinyes/keer/internal/config"
 	"github.com/shinyes/keer/internal/db"
 	httpserver "github.com/shinyes/keer/internal/http"
-	"github.com/shinyes/keer/internal/markdown"
 	"github.com/shinyes/keer/internal/service"
 	"github.com/shinyes/keer/internal/storage"
 	"github.com/shinyes/keer/internal/store"
@@ -21,6 +20,7 @@ type Container struct {
 	UserService       *service.UserService
 	StorageService    *service.StorageSettingsService
 	MemoService       *service.MemoService
+	GroupService      *service.GroupService
 	AttachmentService *service.AttachmentService
 	Router            *fiber.App
 }
@@ -54,8 +54,8 @@ func Build(ctx context.Context, cfg config.Config) (*Container, func() error, er
 		return nil, nil, fmt.Errorf("bootstrap setup: %w", err)
 	}
 
-	md := markdown.NewService()
-	memoService := service.NewMemoService(sqlStore, md)
+	memoService := service.NewMemoService(sqlStore)
+	groupService := service.NewGroupService(sqlStore)
 
 	var fileStorage storage.Store
 	switch cfg.Storage {
@@ -81,7 +81,7 @@ func Build(ctx context.Context, cfg config.Config) (*Container, func() error, er
 	attachmentService := service.NewAttachmentService(sqlStore, fileStorage)
 	userService.SetAvatarStorage(fileStorage)
 	_ = attachmentService.CleanupExpiredUploadSessions(ctx)
-	router := httpserver.NewRouter(cfg, userService, memoService, attachmentService)
+	router := httpserver.NewRouter(cfg, userService, memoService, groupService, attachmentService)
 
 	return &Container{
 		Config:            cfg,
@@ -89,6 +89,7 @@ func Build(ctx context.Context, cfg config.Config) (*Container, func() error, er
 		UserService:       userService,
 		StorageService:    storageService,
 		MemoService:       memoService,
+		GroupService:      groupService,
 		AttachmentService: attachmentService,
 		Router:            router,
 	}, cleanup, nil

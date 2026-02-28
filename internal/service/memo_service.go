@@ -4,25 +4,22 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
-	"github.com/shinyes/keer/internal/markdown"
 	"github.com/shinyes/keer/internal/models"
 	"github.com/shinyes/keer/internal/store"
 )
 
 type MemoService struct {
-	store    *store.SQLStore
-	markdown *markdown.Service
+	store *store.SQLStore
 }
 
-func NewMemoService(s *store.SQLStore, markdownSvc *markdown.Service) *MemoService {
+func NewMemoService(s *store.SQLStore) *MemoService {
 	return &MemoService{
-		store:    s,
-		markdown: markdownSvc,
+		store: s,
 	}
 }
 
@@ -54,6 +51,12 @@ type MemoWithAttachments struct {
 	Attachments []models.Attachment
 }
 
+type MemoChanges struct {
+	Memos            []MemoWithAttachments
+	DeletedMemoNames []string
+	SyncAnchor       time.Time
+}
+
 func (s *MemoService) CreateMemo(ctx context.Context, creatorID int64, input CreateMemoInput) (MemoWithAttachments, error) {
 	content := input.Content
 	visibility := input.Visibility
@@ -64,11 +67,9 @@ func (s *MemoService) CreateMemo(ctx context.Context, creatorID int64, input Cre
 		return MemoWithAttachments{}, err
 	}
 
-	payload, err := s.markdown.ExtractPayload(content)
-	if err != nil {
-		return MemoWithAttachments{}, err
+	payload := models.MemoPayload{
+		Tags: normalizeMemoTags(input.Tags),
 	}
-	payload.Tags = normalizeMemoTags(input.Tags)
 
 	attachmentIDs, err := s.resolveAttachmentIDsFromNames(ctx, creatorID, input.AttachmentNames)
 	if err != nil {
@@ -112,7 +113,7 @@ func (s *MemoService) UpdateMemo(ctx context.Context, updaterID int64, memoID in
 	if err != nil {
 		return MemoWithAttachments{}, err
 	}
-	if current.CreatorID != updaterID {
+	if !canManageMemo(current, updaterID) {
 		return MemoWithAttachments{}, sql.ErrNoRows
 	}
 	if err := validateCoordinates(input.Latitude, input.Longitude); err != nil {
@@ -123,11 +124,8 @@ func (s *MemoService) UpdateMemo(ctx context.Context, updaterID int64, memoID in
 	if input.Content != nil {
 		content := *input.Content
 		update.Content = &content
-		payload, err := s.markdown.ExtractPayload(content)
-		if err != nil {
-			return MemoWithAttachments{}, err
-		}
-		payload.Tags = current.Payload.Tags
+		payload := current.Payload
+		payload.Property = models.MemoPayloadProperty{}
 		update.Payload = &payload
 	}
 	if input.Tags != nil {
@@ -166,7 +164,13 @@ func (s *MemoService) UpdateMemo(ctx context.Context, updaterID int64, memoID in
 
 	var attachmentIDs *[]int64
 	if input.AttachmentNames != nil {
-		ids, err := s.resolveAttachmentIDsFromNames(ctx, updaterID, *input.AttachmentNames)
+		ids, err := s.resolveAttachmentIDsForMemoUpdate(
+			ctx,
+			updaterID,
+			current.CreatorID,
+			current.ID,
+			*input.AttachmentNames,
+		)
 		if err != nil {
 			return MemoWithAttachments{}, err
 		}
@@ -194,13 +198,17 @@ func (s *MemoService) DeleteMemo(ctx context.Context, requesterID int64, memoID 
 	if err != nil {
 		return err
 	}
-	if memo.CreatorID != requesterID {
+	if !canManageMemo(memo, requesterID) {
 		return sql.ErrNoRows
 	}
 	return s.store.DeleteMemo(ctx, memoID)
 }
 
 func (s *MemoService) ListMemos(ctx context.Context, viewerID int64, state *models.MemoState, rawFilter string, pageSize int, pageToken string) ([]MemoWithAttachments, string, error) {
+	if containsContentDrivenFilter(rawFilter) {
+		return nil, "", fmt.Errorf("content-based filter is disabled")
+	}
+
 	filter, err := CompileMemoFilter(rawFilter)
 	if err != nil {
 		return nil, "", err
@@ -218,7 +226,7 @@ func (s *MemoService) ListMemos(ctx context.Context, viewerID int64, state *mode
 
 	// 设置安全上限，避免一次性加载过多 memo 到内存
 	const maxMemoQueryLimit = 10000
-	allVisible, err := s.store.ListVisibleMemos(ctx, viewerID, state, prefilter, maxMemoQueryLimit, 0)
+	allVisible, err := s.store.ListVisibleMemos(ctx, viewerID, state, prefilter, maxMemoQueryLimit, 0, nil)
 	if err != nil {
 		return nil, "", err
 	}
@@ -275,6 +283,104 @@ func (s *MemoService) ListMemos(ctx context.Context, viewerID int64, state *mode
 	return out, nextToken, nil
 }
 
+func (s *MemoService) ListMemoChanges(
+	ctx context.Context,
+	viewerID int64,
+	state *models.MemoState,
+	rawFilter string,
+	since time.Time,
+	syncAnchor time.Time,
+) (MemoChanges, error) {
+	if containsContentDrivenFilter(rawFilter) {
+		return MemoChanges{}, fmt.Errorf("content-based filter is disabled")
+	}
+
+	filter, err := CompileMemoFilter(rawFilter)
+	if err != nil {
+		return MemoChanges{}, err
+	}
+
+	normalizedSince := since.UTC()
+	normalizedAnchor := syncAnchor.UTC()
+	if normalizedAnchor.IsZero() {
+		normalizedAnchor = time.Now().UTC()
+	}
+	if normalizedSince.After(normalizedAnchor) {
+		normalizedSince = normalizedAnchor
+	}
+
+	prefilter := store.EmptyMemoPrefilter()
+	if filter != nil {
+		prefilter = filter.SQLPrefilter()
+	}
+
+	// Incremental sync must return a complete window to avoid advancing
+	// the client anchor past unseen changes.
+	const noQueryLimit = 0
+	allVisible, err := s.store.ListVisibleMemos(
+		ctx,
+		viewerID,
+		state,
+		prefilter,
+		noQueryLimit,
+		0,
+		&store.MemoQueryBounds{
+			UpdatedAfter:         &normalizedSince,
+			UpdatedBeforeOrEqual: &normalizedAnchor,
+		},
+	)
+	if err != nil {
+		return MemoChanges{}, err
+	}
+
+	filtered := make([]models.Memo, 0, len(allVisible))
+	for _, memo := range allVisible {
+		matched, err := filter.Matches(memo)
+		if err != nil {
+			return MemoChanges{}, err
+		}
+		if !matched {
+			continue
+		}
+		filtered = append(filtered, memo)
+	}
+
+	memoIDs := make([]int64, 0, len(filtered))
+	for _, memo := range filtered {
+		memoIDs = append(memoIDs, memo.ID)
+	}
+
+	attachmentsMap, err := s.store.ListAttachmentsByMemoIDs(ctx, memoIDs)
+	if err != nil {
+		return MemoChanges{}, err
+	}
+
+	changedMemos := make([]MemoWithAttachments, 0, len(filtered))
+	for _, memo := range filtered {
+		changedMemos = append(changedMemos, MemoWithAttachments{
+			Memo:        memo,
+			Attachments: attachmentsMap[memo.ID],
+		})
+	}
+
+	deletedMemoNames, err := s.store.ListDeletedVisibleMemoNames(
+		ctx,
+		viewerID,
+		normalizedSince,
+		normalizedAnchor,
+		noQueryLimit,
+	)
+	if err != nil {
+		return MemoChanges{}, err
+	}
+
+	return MemoChanges{
+		Memos:            changedMemos,
+		DeletedMemoNames: deletedMemoNames,
+		SyncAnchor:       normalizedAnchor,
+	}, nil
+}
+
 func (s *MemoService) GetUserTagCount(ctx context.Context, requestedUserID int64, viewerID int64) (map[string]int, error) {
 	memos, err := s.store.ListVisibleMemosByCreator(ctx, requestedUserID, viewerID, models.MemoStateNormal)
 	if err != nil {
@@ -290,30 +396,6 @@ func (s *MemoService) GetUserTagCount(ctx context.Context, requestedUserID int64
 	return tagCount, nil
 }
 
-func (s *MemoService) RebuildAllMemoPayloads(ctx context.Context) (int, error) {
-	memos, err := s.store.ListAllMemos(ctx)
-	if err != nil {
-		return 0, err
-	}
-	updated := 0
-	for _, memo := range memos {
-		payload, err := s.markdown.ExtractPayload(memo.Content)
-		if err != nil {
-			return updated, err
-		}
-		payload.Tags = memo.Payload.Tags
-		if slices.Equal(payload.Tags, memo.Payload.Tags) &&
-			payload.Property == memo.Payload.Property {
-			continue
-		}
-		if err := s.store.UpdateMemoPayload(ctx, memo.ID, payload); err != nil {
-			return updated, err
-		}
-		updated++
-	}
-	return updated, nil
-}
-
 func parsePageToken(pageToken string) (int, error) {
 	pageToken = strings.TrimSpace(pageToken)
 	if pageToken == "" {
@@ -324,6 +406,98 @@ func parsePageToken(pageToken string) (int, error) {
 		return 0, fmt.Errorf("invalid page token")
 	}
 	return offset, nil
+}
+
+func containsContentDrivenFilter(rawFilter string) bool {
+	trimmed := strings.TrimSpace(rawFilter)
+	if trimmed == "" {
+		return false
+	}
+
+	identifiers := extractFilterIdentifiers(trimmed)
+	if len(identifiers) == 0 {
+		return false
+	}
+
+	for _, ident := range identifiers {
+		if ident == "content" || strings.HasPrefix(ident, "content.") {
+			return true
+		}
+		if ident == "property" || strings.HasPrefix(ident, "property.") {
+			return true
+		}
+		switch ident {
+		case "has_link",
+			"has_task_list",
+			"has_code",
+			"has_incomplete_tasks":
+			return true
+		}
+	}
+	return false
+}
+
+func extractFilterIdentifiers(filter string) []string {
+	runes := []rune(filter)
+	identifiers := make([]string, 0, 8)
+	var quote rune
+	escaped := false
+
+	for i := 0; i < len(runes); {
+		ch := runes[i]
+
+		if quote != 0 {
+			if escaped {
+				escaped = false
+				i++
+				continue
+			}
+			if ch == '\\' {
+				escaped = true
+				i++
+				continue
+			}
+			if ch == quote {
+				quote = 0
+			}
+			i++
+			continue
+		}
+
+		if ch == '"' || ch == '\'' {
+			quote = ch
+			i++
+			continue
+		}
+
+		if !isFilterIdentifierStart(ch) {
+			i++
+			continue
+		}
+
+		start := i
+		i++
+		for i < len(runes) {
+			next := runes[i]
+			if isFilterIdentifierPart(next) || next == '.' {
+				i++
+				continue
+			}
+			break
+		}
+
+		identifiers = append(identifiers, strings.ToLower(string(runes[start:i])))
+	}
+
+	return identifiers
+}
+
+func isFilterIdentifierStart(ch rune) bool {
+	return ch == '_' || unicode.IsLetter(ch)
+}
+
+func isFilterIdentifierPart(ch rune) bool {
+	return ch == '_' || unicode.IsLetter(ch) || unicode.IsDigit(ch)
 }
 
 func (s *MemoService) resolveAttachmentIDsFromNames(ctx context.Context, userID int64, names []string) ([]int64, error) {
@@ -351,6 +525,82 @@ func (s *MemoService) resolveAttachmentIDsFromNames(ctx context.Context, userID 
 		ids = append(ids, id)
 	}
 	return ids, nil
+}
+
+func (s *MemoService) resolveAttachmentIDsForMemoUpdate(
+	ctx context.Context,
+	updaterID int64,
+	memoCreatorID int64,
+	memoID int64,
+	names []string,
+) ([]int64, error) {
+	if len(names) == 0 {
+		return []int64{}, nil
+	}
+
+	ids := make([]int64, 0, len(names))
+	seen := make(map[int64]struct{})
+	for _, name := range names {
+		id, err := parseResourceID(name)
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+
+	existingMap, err := s.store.ListAttachmentsByMemoIDs(ctx, []int64{memoID})
+	if err != nil {
+		return nil, err
+	}
+	existingAttachmentIDs := make(map[int64]struct{}, len(existingMap[memoID]))
+	for _, attachment := range existingMap[memoID] {
+		existingAttachmentIDs[attachment.ID] = struct{}{}
+	}
+
+	for _, id := range ids {
+		if _, alreadyAttached := existingAttachmentIDs[id]; alreadyAttached {
+			continue
+		}
+
+		belongsToUpdater, err := s.store.AttachmentBelongsToUser(ctx, id, updaterID)
+		if err != nil {
+			return nil, err
+		}
+		if belongsToUpdater {
+			continue
+		}
+
+		if memoCreatorID != updaterID {
+			belongsToCreator, err := s.store.AttachmentBelongsToUser(ctx, id, memoCreatorID)
+			if err != nil {
+				return nil, err
+			}
+			if belongsToCreator {
+				continue
+			}
+		}
+
+		return nil, fmt.Errorf("attachment %d not found", id)
+	}
+
+	return ids, nil
+}
+
+func canManageMemo(memo models.Memo, userID int64) bool {
+	if memo.CreatorID == userID {
+		return true
+	}
+	collaboratorTag := "collab/" + strconv.FormatInt(userID, 10)
+	for _, tag := range memo.Payload.Tags {
+		if strings.TrimSpace(tag) == collaboratorTag {
+			return true
+		}
+	}
+	return false
 }
 
 func parseResourceID(name string) (int64, error) {

@@ -105,12 +105,44 @@ func TestListMemos_CELTagsExistsAndMembership(t *testing.T) {
 		t.Fatalf("expected 2 memos for full CEL expression, got %d", len(list))
 	}
 
-	list, _, err = services.memoService.ListMemos(ctx, user.ID, nil, `property.hasLink == true`, 200, "")
+	_, _, err = services.memoService.ListMemos(ctx, user.ID, nil, `property.hasLink == true`, 200, "")
+	if err == nil {
+		t.Fatalf("expected property.hasLink filter to be rejected")
+	}
+
+	_, _, err = services.memoService.ListMemos(ctx, user.ID, nil, `content.contains("book")`, 200, "")
+	if err == nil {
+		t.Fatalf("expected content.contains filter to be rejected")
+	}
+}
+
+func TestListMemos_ContentKeywordInsideTagLiteralIsAllowed(t *testing.T) {
+	services := setupTestServices(t)
+	ctx := context.Background()
+	user := mustCreateUser(t, services.store, "u_keyword_tag")
+
+	if _, err := services.memoService.CreateMemo(ctx, user.ID, CreateMemoInput{
+		Content:    "memo with literal keyword tag",
+		Tags:       []string{"content"},
+		Visibility: models.VisibilityPrivate,
+	}); err != nil {
+		t.Fatalf("CreateMemo content-tag error = %v", err)
+	}
+
+	list, _, err := services.memoService.ListMemos(ctx, user.ID, nil, `tag in ["content"]`, 200, "")
 	if err != nil {
-		t.Fatalf("ListMemos property.hasLink error = %v", err)
+		t.Fatalf("ListMemos tag in [content] error = %v", err)
 	}
 	if len(list) != 1 {
-		t.Fatalf("expected 1 memo for property.hasLink, got %d", len(list))
+		t.Fatalf("expected 1 memo for tag in [content], got %d", len(list))
+	}
+
+	list, _, err = services.memoService.ListMemos(ctx, user.ID, nil, `"content" in tags`, 200, "")
+	if err != nil {
+		t.Fatalf(`ListMemos "content" in tags error = %v`, err)
+	}
+	if len(list) != 1 {
+		t.Fatalf(`expected 1 memo for "content" in tags, got %d`, len(list))
 	}
 }
 

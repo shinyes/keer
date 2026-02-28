@@ -17,7 +17,6 @@ import (
 	"github.com/shinyes/keer/internal/app"
 	"github.com/shinyes/keer/internal/config"
 	"github.com/shinyes/keer/internal/db"
-	"github.com/shinyes/keer/internal/markdown"
 	"github.com/shinyes/keer/internal/models"
 	"github.com/shinyes/keer/internal/service"
 	"github.com/shinyes/keer/internal/store"
@@ -62,7 +61,7 @@ func runServe(args []string) {
 	}
 	if *consoleMode {
 		log.Printf("runtime admin console enabled")
-		go runRuntimeConsole(cfg, container.UserService, container.StorageService, container.MemoService)
+		go runRuntimeConsole(cfg, container.UserService, container.StorageService)
 	}
 	log.Fatal(container.Router.Listen(container.Config.Addr))
 }
@@ -89,32 +88,13 @@ func runAdmin(args []string) error {
 	}
 
 	sqlStore := store.New(sqliteDB)
-	md := markdown.NewService()
-	memoService := service.NewMemoService(sqlStore, md)
 	userService := service.NewUserService(sqlStore)
 	storageService := service.NewStorageSettingsService(sqlStore)
-	return executeAdminCommand(context.Background(), cfg.AllowRegistration, userService, storageService, memoService, args, os.Stdin)
+	return executeAdminCommand(context.Background(), cfg.AllowRegistration, userService, storageService, args, os.Stdin)
 }
 
-func executeAdminCommand(ctx context.Context, allowRegistrationFallback bool, userService *service.UserService, storageService *service.StorageSettingsService, memoService *service.MemoService, args []string, interactiveInput io.Reader) error {
+func executeAdminCommand(ctx context.Context, allowRegistrationFallback bool, userService *service.UserService, storageService *service.StorageSettingsService, args []string, interactiveInput io.Reader) error {
 	switch args[0] {
-	case "memo":
-		if len(args) < 2 {
-			printUsage()
-			return fmt.Errorf("missing memo subcommand")
-		}
-		switch args[1] {
-		case "rebuild-payload":
-			count, err := memoService.RebuildAllMemoPayloads(context.Background())
-			if err != nil {
-				return fmt.Errorf("rebuild payload failed: %w", err)
-			}
-			fmt.Printf("rebuild complete, updated=%d\n", count)
-			return nil
-		default:
-			printUsage()
-			return fmt.Errorf("unknown admin subcommand: %s %s", args[0], args[1])
-		}
 	case "user":
 		return runAdminUser(ctx, userService, args[1:])
 	case "token":
@@ -129,7 +109,7 @@ func executeAdminCommand(ctx context.Context, allowRegistrationFallback bool, us
 	}
 }
 
-func runRuntimeConsole(cfg config.Config, userService *service.UserService, storageService *service.StorageSettingsService, memoService *service.MemoService) {
+func runRuntimeConsole(cfg config.Config, userService *service.UserService, storageService *service.StorageSettingsService) {
 	fmt.Println("Runtime Console: 输入命令，示例：user create demo demo-pass")
 	fmt.Println("Runtime Console: 输入 help 查看命令，输入 exit 退出控制台（不会停止服务）")
 
@@ -176,7 +156,7 @@ func runRuntimeConsole(cfg config.Config, userService *service.UserService, stor
 			}
 		}
 
-		if err := executeAdminCommand(context.Background(), cfg.AllowRegistration, userService, storageService, memoService, parsed, reader); err != nil {
+		if err := executeAdminCommand(context.Background(), cfg.AllowRegistration, userService, storageService, parsed, reader); err != nil {
 			fmt.Printf("command failed: %v\n", err)
 		}
 		if errors.Is(readErr, io.EOF) {
@@ -582,7 +562,6 @@ func printRuntimeConsoleUsage() {
 	fmt.Println("  token revoke <token_id>")
 	fmt.Println("  registration status|enable|disable")
 	fmt.Println("  storage status|set-local|set-s3 ...|wizard")
-	fmt.Println("  memo rebuild-payload")
 	fmt.Println("  help")
 	fmt.Println("  exit")
 }

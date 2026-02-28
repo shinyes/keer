@@ -22,7 +22,13 @@ import (
 	"github.com/shinyes/keer/internal/service"
 )
 
-func NewRouter(cfg config.Config, userService *service.UserService, memoService *service.MemoService, attachmentService *service.AttachmentService) *fiber.App {
+func NewRouter(
+	cfg config.Config,
+	userService *service.UserService,
+	memoService *service.MemoService,
+	groupService *service.GroupService,
+	attachmentService *service.AttachmentService,
+) *fiber.App {
 	bodyLimit := cfg.BodyLimitMB * 1024 * 1024
 	if bodyLimit <= 0 {
 		bodyLimit = 64 * 1024 * 1024
@@ -286,6 +292,53 @@ func NewRouter(cfg config.Config, userService *service.UserService, memoService 
 		return c.JSON(resp)
 	})
 
+	api.Get("/memos/changes", func(c *fiber.Ctx) error {
+		currentUser := CurrentUser(c)
+		filter := c.Query("filter", "")
+
+		sinceRaw := strings.TrimSpace(c.Query("since"))
+		if sinceRaw == "" {
+			return badRequest(c, "since is required")
+		}
+		since, err := time.Parse(time.RFC3339Nano, sinceRaw)
+		if err != nil {
+			return badRequest(c, "invalid since")
+		}
+
+		var state *models.MemoState
+		stateRaw := strings.TrimSpace(c.Query("state"))
+		if stateRaw != "" {
+			s := models.MemoState(stateRaw)
+			if !s.IsValid() {
+				return badRequest(c, "invalid state")
+			}
+			state = &s
+		}
+
+		syncAnchor := time.Now().UTC()
+		changes, err := memoService.ListMemoChanges(
+			c.Context(),
+			currentUser.ID,
+			state,
+			filter,
+			since,
+			syncAnchor,
+		)
+		if err != nil {
+			return badRequest(c, err.Error())
+		}
+
+		resp := listMemoChangesResponse{
+			Memos:            make([]apiMemo, 0, len(changes.Memos)),
+			DeletedMemoNames: changes.DeletedMemoNames,
+			SyncAnchor:       changes.SyncAnchor.Format(time.RFC3339Nano),
+		}
+		for _, item := range changes.Memos {
+			resp.Memos = append(resp.Memos, buildAPIMemo(item))
+		}
+		return c.JSON(resp)
+	})
+
 	api.Post("/memos", func(c *fiber.Ctx) error {
 		currentUser := CurrentUser(c)
 		var req createMemoRequest
@@ -402,6 +455,187 @@ func NewRouter(cfg config.Config, userService *service.UserService, memoService 
 			return internalError(c, err)
 		}
 		return c.SendStatus(fiber.StatusNoContent)
+	})
+
+	api.Get("/groups", func(c *fiber.Ctx) error {
+		currentUser := CurrentUser(c)
+		groups, err := groupService.ListGroups(c.Context(), currentUser.ID)
+		if err != nil {
+			return internalError(c, err)
+		}
+
+		resp := listGroupsResponse{
+			Groups: make([]apiGroup, 0, len(groups)),
+		}
+		for _, group := range groups {
+			resp.Groups = append(resp.Groups, toAPIGroup(group))
+		}
+		return c.JSON(resp)
+	})
+
+	api.Post("/groups", func(c *fiber.Ctx) error {
+		currentUser := CurrentUser(c)
+		var req createGroupRequest
+		if err := c.BodyParser(&req); err != nil {
+			return badRequest(c, "invalid request body")
+		}
+		group, err := groupService.CreateGroup(
+			c.Context(),
+			currentUser.ID,
+			req.Name,
+			req.Description,
+		)
+		if err != nil {
+			return badRequest(c, err.Error())
+		}
+		return c.JSON(toAPIGroup(group))
+	})
+
+	api.Post("/groups/:id/join", func(c *fiber.Ctx) error {
+		currentUser := CurrentUser(c)
+		groupID, err := parseID(c.Params("id"))
+		if err != nil {
+			return badRequest(c, "invalid group id")
+		}
+		group, err := groupService.JoinGroup(c.Context(), currentUser.ID, groupID)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return notFound(c, "group not found")
+			}
+			return internalError(c, err)
+		}
+		return c.JSON(toAPIGroup(group))
+	})
+
+	api.Patch("/groups/:id", func(c *fiber.Ctx) error {
+		currentUser := CurrentUser(c)
+		groupID, err := parseID(c.Params("id"))
+		if err != nil {
+			return badRequest(c, "invalid group id")
+		}
+		var req updateGroupRequest
+		if err := c.BodyParser(&req); err != nil {
+			return badRequest(c, "invalid request body")
+		}
+		group, err := groupService.UpdateGroup(c.Context(), currentUser.ID, groupID, req.Name, req.Description)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return notFound(c, "group not found")
+			}
+			return badRequest(c, err.Error())
+		}
+		return c.JSON(toAPIGroup(group))
+	})
+
+	api.Delete("/groups/:id", func(c *fiber.Ctx) error {
+		currentUser := CurrentUser(c)
+		groupID, err := parseID(c.Params("id"))
+		if err != nil {
+			return badRequest(c, "invalid group id")
+		}
+		if err := groupService.DeleteOrLeaveGroup(c.Context(), currentUser.ID, groupID); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return notFound(c, "group not found")
+			}
+			return internalError(c, err)
+		}
+		return c.SendStatus(fiber.StatusNoContent)
+	})
+
+	api.Get("/groups/:id/messages", func(c *fiber.Ctx) error {
+		currentUser := CurrentUser(c)
+		groupID, err := parseID(c.Params("id"))
+		if err != nil {
+			return badRequest(c, "invalid group id")
+		}
+		pageSize, _ := strconv.Atoi(strings.TrimSpace(c.Query("pageSize", "50")))
+		pageToken := c.Query("pageToken", "")
+		messages, nextToken, err := groupService.ListGroupMessages(
+			c.Context(),
+			currentUser.ID,
+			groupID,
+			pageSize,
+			pageToken,
+		)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return notFound(c, "group not found")
+			}
+			if strings.Contains(strings.ToLower(err.Error()), "pagetoken") {
+				return badRequest(c, "invalid pageToken")
+			}
+			return internalError(c, err)
+		}
+		resp := listGroupMessagesResponse{
+			Messages:      make([]apiGroupMessage, 0, len(messages)),
+			NextPageToken: nextToken,
+		}
+		for _, msg := range messages {
+			resp.Messages = append(resp.Messages, toAPIGroupMessage(msg))
+		}
+		return c.JSON(resp)
+	})
+
+	api.Post("/groups/:id/messages", func(c *fiber.Ctx) error {
+		currentUser := CurrentUser(c)
+		groupID, err := parseID(c.Params("id"))
+		if err != nil {
+			return badRequest(c, "invalid group id")
+		}
+		var req createGroupMessageRequest
+		if err := c.BodyParser(&req); err != nil {
+			return badRequest(c, "invalid request body")
+		}
+		msg, err := groupService.CreateGroupMessage(
+			c.Context(),
+			currentUser.ID,
+			groupID,
+			req.Content,
+			req.Tags,
+		)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return notFound(c, "group not found")
+			}
+			return badRequest(c, err.Error())
+		}
+		return c.JSON(toAPIGroupMessage(msg))
+	})
+
+	api.Get("/groups/:id/tags", func(c *fiber.Ctx) error {
+		currentUser := CurrentUser(c)
+		groupID, err := parseID(c.Params("id"))
+		if err != nil {
+			return badRequest(c, "invalid group id")
+		}
+		tags, err := groupService.ListGroupTags(c.Context(), currentUser.ID, groupID)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return notFound(c, "group not found")
+			}
+			return internalError(c, err)
+		}
+		return c.JSON(listGroupTagsResponse{Tags: tags})
+	})
+
+	api.Post("/groups/:id/tags", func(c *fiber.Ctx) error {
+		currentUser := CurrentUser(c)
+		groupID, err := parseID(c.Params("id"))
+		if err != nil {
+			return badRequest(c, "invalid group id")
+		}
+		var req addGroupTagRequest
+		if err := c.BodyParser(&req); err != nil {
+			return badRequest(c, "invalid request body")
+		}
+		tags, err := groupService.AddGroupTag(c.Context(), currentUser.ID, groupID, req.Tag)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return notFound(c, "group not found")
+			}
+			return badRequest(c, err.Error())
+		}
+		return c.JSON(listGroupTagsResponse{Tags: tags})
 	})
 
 	api.Get("/attachments", func(c *fiber.Ctx) error {
@@ -755,13 +989,9 @@ func NewRouter(cfg config.Config, userService *service.UserService, memoService 
 	})
 
 	app.Get("/file/avatars/:id", AuthMiddleware(userService), func(c *fiber.Ctx) error {
-		currentUser := CurrentUser(c)
 		userID, err := parseID(c.Params("id"))
 		if err != nil {
 			return badRequest(c, "invalid user id")
-		}
-		if userID != currentUser.ID {
-			return c.SendStatus(fiber.StatusForbidden)
 		}
 
 		user, err := userService.GetUser(c.Context(), userID)
@@ -903,6 +1133,42 @@ func toAPIUser(user models.User) apiUser {
 		State:       "NORMAL",
 		CreateTime:  formatMaybeTime(user.CreateTime),
 		UpdateTime:  formatMaybeTime(user.UpdateTime),
+	}
+}
+
+func toAPIGroup(group service.GroupWithMembers) apiGroup {
+	members := make([]apiGroupMember, 0, len(group.Members))
+	for _, member := range group.Members {
+		members = append(members, apiGroupMember{
+			Name:        member.Name(),
+			Username:    member.Username,
+			DisplayName: member.DisplayName,
+		})
+	}
+	return apiGroup{
+		Name:        group.Group.Name(),
+		Creator:     "users/" + models.Int64ToString(group.Group.CreatorID),
+		CreateTime:  formatMaybeTime(group.Group.CreateTime),
+		UpdateTime:  formatMaybeTime(group.Group.UpdateTime),
+		GroupName:   group.Group.GroupName,
+		Description: group.Group.Description,
+		Members:     members,
+	}
+}
+
+func toAPIGroupMessage(msg service.GroupMessageWithCreator) apiGroupMessage {
+	tags := msg.Message.Tags
+	if tags == nil {
+		tags = []string{}
+	}
+	return apiGroupMessage{
+		Name:       msg.Message.Name(),
+		Group:      "groups/" + models.Int64ToString(msg.Message.GroupID),
+		Creator:    msg.Creator.Name(),
+		CreateTime: formatMaybeTime(msg.Message.CreateTime),
+		UpdateTime: formatMaybeTime(msg.Message.UpdateTime),
+		Content:    msg.Message.Content,
+		Tags:       tags,
 	}
 }
 
