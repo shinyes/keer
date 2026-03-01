@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -60,6 +61,11 @@ type CreateUserInput struct {
 	ValidateOnly bool
 }
 
+type UserChanges struct {
+	Users      []models.User
+	SyncAnchor time.Time
+}
+
 func NewUserService(s *store.SQLStore) *UserService {
 	return &UserService{store: s}
 }
@@ -73,7 +79,7 @@ func (s *UserService) GetUser(ctx context.Context, userID int64) (models.User, e
 }
 
 func (s *UserService) GetUserByIdentifier(ctx context.Context, identifier string) (models.User, error) {
-	identifier = strings.TrimSpace(identifier)
+	identifier = normalizeUserIdentifier(identifier)
 	if identifier == "" {
 		return models.User{}, sql.ErrNoRows
 	}
@@ -81,6 +87,58 @@ func (s *UserService) GetUserByIdentifier(ctx context.Context, identifier string
 		return s.store.GetUserByID(ctx, userID)
 	}
 	return s.store.GetUserByUsername(ctx, normalizeUsername(identifier))
+}
+
+func (s *UserService) ListUserChanges(
+	ctx context.Context,
+	identifiers []string,
+	since time.Time,
+	syncAnchor time.Time,
+) (UserChanges, error) {
+	normalizedAnchor := syncAnchor.UTC()
+	if normalizedAnchor.IsZero() {
+		normalizedAnchor = time.Now().UTC()
+	}
+	normalizedSince := since.UTC()
+	if normalizedSince.After(normalizedAnchor) {
+		normalizedSince = normalizedAnchor
+	}
+
+	seenUserIDs := make(map[int64]struct{}, len(identifiers))
+	users := make([]models.User, 0, len(identifiers))
+	for _, identifier := range identifiers {
+		user, err := s.GetUserByIdentifier(ctx, identifier)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
+			}
+			return UserChanges{}, err
+		}
+		if _, exists := seenUserIDs[user.ID]; exists {
+			continue
+		}
+		seenUserIDs[user.ID] = struct{}{}
+
+		updatedAt := user.UpdateTime.UTC()
+		if !updatedAt.After(normalizedSince) || updatedAt.After(normalizedAnchor) {
+			continue
+		}
+		users = append(users, user)
+	}
+
+	sort.SliceStable(users, func(i, j int) bool {
+		left := users[i].UpdateTime.UTC()
+		right := users[j].UpdateTime.UTC()
+		if left.Equal(right) {
+			return users[i].ID < users[j].ID
+		}
+		return left.Before(right)
+	})
+
+	return UserChanges{
+		Users:      users,
+		SyncAnchor: normalizedAnchor,
+	}, nil
 }
 
 func (s *UserService) UpdateUserAvatar(ctx context.Context, userID int64, avatarURL string) (models.User, error) {
@@ -368,6 +426,16 @@ func isUniqueConstraintErr(err error) bool {
 
 func normalizeUsername(raw string) string {
 	return strings.ToLower(strings.TrimSpace(raw))
+}
+
+func normalizeUserIdentifier(raw string) string {
+	identifier := strings.TrimSpace(raw)
+	identifier = strings.TrimPrefix(identifier, "users/")
+	identifier = strings.TrimPrefix(identifier, "users\\")
+	if pipe := strings.Index(identifier, "|"); pipe >= 0 {
+		identifier = identifier[:pipe]
+	}
+	return strings.TrimSpace(identifier)
 }
 
 func (s *UserService) createAccessToken(ctx context.Context, userID int64, description string, expiresAt *time.Time) (string, error) {

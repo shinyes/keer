@@ -69,6 +69,15 @@ type apiUser struct {
 	UpdateTime  string `json:"updateTime,omitempty"`
 }
 
+type listUsersResponse struct {
+	Users []apiUser `json:"users"`
+}
+
+type listUserChangesResponse struct {
+	Users      []apiUser `json:"users"`
+	SyncAnchor string    `json:"syncAnchor"`
+}
+
 type listMemosResponse struct {
 	Memos         []apiMemo `json:"memos"`
 	NextPageToken string    `json:"nextPageToken,omitempty"`

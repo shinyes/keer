@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 
@@ -207,6 +210,75 @@ func TestGetUserStatsByUsernameEndpoint(t *testing.T) {
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+}
+
+func TestBatchGetUsersEndpoint(t *testing.T) {
+	app := newTestApp(t, true, true)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/users/batch?ids=1,users/1,missing-user", nil)
+	req.Header.Set("Authorization", "Bearer demo-token")
+	resp, err := app.Test(req, 5000)
+	if err != nil {
+		t.Fatalf("batch get users request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d body=%s", resp.StatusCode, string(body))
+	}
+
+	var payload listUsersResponse
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode batch get users response failed: %v", err)
+	}
+	if len(payload.Users) != 1 {
+		t.Fatalf("expected 1 user, got %d", len(payload.Users))
+	}
+	if payload.Users[0].Username != "demo" {
+		t.Fatalf("expected demo, got %q", payload.Users[0].Username)
+	}
+}
+
+func TestGetUserChangesEndpoint(t *testing.T) {
+	app, userService := newTestAppWithUserService(t, true, true)
+
+	demo, err := userService.GetUserByIdentifier(context.Background(), "demo")
+	if err != nil {
+		t.Fatalf("GetUserByIdentifier(demo) error = %v", err)
+	}
+	since := time.Now().UTC().Add(-1 * time.Second)
+	if _, err := userService.UpdateUserAvatar(context.Background(), demo.ID, "/file/avatars/demo-v2"); err != nil {
+		t.Fatalf("UpdateUserAvatar(demo) error = %v", err)
+	}
+
+	endpoint := "/api/v1/users/changes?since=" + url.QueryEscape(since.Format(time.RFC3339Nano)) + "&ids=1,users/1,missing"
+	req := httptest.NewRequest(http.MethodGet, endpoint, nil)
+	req.Header.Set("Authorization", "Bearer demo-token")
+	resp, err := app.Test(req, 5000)
+	if err != nil {
+		t.Fatalf("get user changes request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d body=%s", resp.StatusCode, string(body))
+	}
+
+	var payload listUserChangesResponse
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode user changes response failed: %v", err)
+	}
+	if payload.SyncAnchor == "" {
+		t.Fatalf("expected non-empty sync anchor")
+	}
+	if len(payload.Users) != 1 {
+		t.Fatalf("expected exactly 1 changed user, got %d", len(payload.Users))
+	}
+	if payload.Users[0].Username != "demo" {
+		t.Fatalf("expected changed user demo, got %q", payload.Users[0].Username)
 	}
 }
 

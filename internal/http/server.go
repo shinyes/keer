@@ -199,6 +199,79 @@ func NewRouter(
 		})
 	})
 
+	api.Get("/users/batch", func(c *fiber.Ctx) error {
+		identifiers := parseBatchIdentifiers(c.Query("ids"))
+		if len(identifiers) > 200 {
+			return badRequest(c, "too many user ids")
+		}
+
+		resp := listUsersResponse{
+			Users: make([]apiUser, 0, len(identifiers)),
+		}
+		if len(identifiers) == 0 {
+			return c.JSON(resp)
+		}
+
+		seenUserIDs := make(map[int64]struct{}, len(identifiers))
+		for _, identifier := range identifiers {
+			user, err := userService.GetUserByIdentifier(c.Context(), identifier)
+			if err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					continue
+				}
+				return internalError(c, err)
+			}
+			if _, exists := seenUserIDs[user.ID]; exists {
+				continue
+			}
+			seenUserIDs[user.ID] = struct{}{}
+			resp.Users = append(resp.Users, toAPIUser(user))
+		}
+
+		return c.JSON(resp)
+	})
+
+	api.Get("/users/changes", func(c *fiber.Ctx) error {
+		currentUser := CurrentUser(c)
+
+		sinceRaw := strings.TrimSpace(c.Query("since"))
+		if sinceRaw == "" {
+			return badRequest(c, "since is required")
+		}
+		since, err := time.Parse(time.RFC3339Nano, sinceRaw)
+		if err != nil {
+			return badRequest(c, "invalid since")
+		}
+
+		identifiers := parseBatchIdentifiers(c.Query("ids"))
+		if len(identifiers) == 0 {
+			identifiers = []string{models.Int64ToString(currentUser.ID)}
+		}
+		if len(identifiers) > 200 {
+			return badRequest(c, "too many user ids")
+		}
+
+		syncAnchor := time.Now().UTC()
+		changes, err := userService.ListUserChanges(
+			c.Context(),
+			identifiers,
+			since,
+			syncAnchor,
+		)
+		if err != nil {
+			return internalError(c, err)
+		}
+
+		resp := listUserChangesResponse{
+			Users:      make([]apiUser, 0, len(changes.Users)),
+			SyncAnchor: changes.SyncAnchor.Format(time.RFC3339Nano),
+		}
+		for _, user := range changes.Users {
+			resp.Users = append(resp.Users, toAPIUser(user))
+		}
+		return c.JSON(resp)
+	})
+
 	api.Get("/users/:name", func(c *fiber.Ctx) error {
 		name := strings.TrimSpace(c.Params("name"))
 		if name == "" {
@@ -1264,6 +1337,24 @@ func parseID(raw string) (int64, error) {
 		return 0, fmt.Errorf("empty id")
 	}
 	return strconv.ParseInt(raw, 10, 64)
+}
+
+func parseBatchIdentifiers(raw string) []string {
+	items := strings.Split(raw, ",")
+	seen := make(map[string]struct{}, len(items))
+	result := make([]string, 0, len(items))
+	for _, item := range items {
+		identifier := strings.TrimSpace(item)
+		if identifier == "" {
+			continue
+		}
+		if _, exists := seen[identifier]; exists {
+			continue
+		}
+		seen[identifier] = struct{}{}
+		result = append(result, identifier)
+	}
+	return result
 }
 
 func parseNonNegativeInt64(raw string) (int64, error) {

@@ -404,3 +404,70 @@ func TestRevokeAccessTokenByID(t *testing.T) {
 		t.Fatalf("expected ErrTokenAlreadyRevoked on second revoke, got %v", err)
 	}
 }
+
+func TestListUserChanges_UsesIncrementalWindowAndIdentifierForms(t *testing.T) {
+	services := setupTestServices(t)
+	userService := NewUserService(services.store)
+	ctx := context.Background()
+
+	first, err := userService.CreateUser(ctx, nil, CreateUserInput{
+		Username: "user-change-1",
+		Password: "pass-123",
+	}, true)
+	if err != nil {
+		t.Fatalf("CreateUser(first) error = %v", err)
+	}
+	second, err := userService.CreateUser(ctx, nil, CreateUserInput{
+		Username: "user-change-2",
+		Password: "pass-123",
+	}, true)
+	if err != nil {
+		t.Fatalf("CreateUser(second) error = %v", err)
+	}
+
+	since := time.Now().UTC().Add(-1 * time.Second)
+	if _, err := userService.UpdateUserAvatar(ctx, first.ID, "/file/avatars/first"); err != nil {
+		t.Fatalf("UpdateUserAvatar(first) error = %v", err)
+	}
+	if _, err := userService.UpdateUserAvatar(ctx, second.ID, "/file/avatars/second"); err != nil {
+		t.Fatalf("UpdateUserAvatar(second) error = %v", err)
+	}
+	anchor := time.Now().UTC()
+
+	changes, err := userService.ListUserChanges(
+		ctx,
+		[]string{
+			strconv.FormatInt(first.ID, 10),
+			"users/" + strconv.FormatInt(second.ID, 10),
+			"users/" + strconv.FormatInt(first.ID, 10),
+			"missing-user",
+		},
+		since,
+		anchor,
+	)
+	if err != nil {
+		t.Fatalf("ListUserChanges() error = %v", err)
+	}
+	if len(changes.Users) != 2 {
+		t.Fatalf("expected 2 changed users, got %d", len(changes.Users))
+	}
+	if changes.SyncAnchor.IsZero() {
+		t.Fatalf("expected non-zero sync anchor")
+	}
+	if changes.Users[0].ID >= changes.Users[1].ID && changes.Users[0].UpdateTime.Equal(changes.Users[1].UpdateTime) {
+		t.Fatalf("expected deterministic ordering by id when update time equal")
+	}
+
+	emptyWindow, err := userService.ListUserChanges(
+		ctx,
+		[]string{strconv.FormatInt(first.ID, 10)},
+		anchor.Add(time.Minute),
+		anchor,
+	)
+	if err != nil {
+		t.Fatalf("ListUserChanges(empty window) error = %v", err)
+	}
+	if len(emptyWindow.Users) != 0 {
+		t.Fatalf("expected empty changes when since is after anchor, got %d", len(emptyWindow.Users))
+	}
+}
