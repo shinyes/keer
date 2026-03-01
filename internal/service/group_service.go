@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -14,6 +15,8 @@ import (
 type GroupService struct {
 	store *store.SQLStore
 }
+
+var ErrGroupMessagePermissionDenied = errors.New("group message permission denied")
 
 type GroupWithMembers struct {
 	Group   models.Group
@@ -218,6 +221,84 @@ func (s *GroupService) CreateGroupMessage(
 	}, nil
 }
 
+func (s *GroupService) UpdateGroupMessage(
+	ctx context.Context,
+	userID int64,
+	groupID int64,
+	messageID int64,
+	content *string,
+	tags *[]string,
+) (GroupMessageWithCreator, error) {
+	if err := s.ensureGroupMember(ctx, groupID, userID); err != nil {
+		return GroupMessageWithCreator{}, err
+	}
+	existing, err := s.store.GetGroupMessageByID(ctx, messageID)
+	if err != nil {
+		return GroupMessageWithCreator{}, err
+	}
+	if existing.GroupID != groupID {
+		return GroupMessageWithCreator{}, sql.ErrNoRows
+	}
+	if !canManageGroupMessage(existing, userID) {
+		return GroupMessageWithCreator{}, ErrGroupMessagePermissionDenied
+	}
+
+	nextContent := existing.Content
+	if content != nil {
+		nextContent = strings.TrimSpace(*content)
+	}
+	if strings.TrimSpace(nextContent) == "" {
+		return GroupMessageWithCreator{}, fmt.Errorf("message content is required")
+	}
+
+	nextTags := existing.Tags
+	if tags != nil {
+		nextTags = *tags
+	}
+
+	updated, err := s.store.UpdateGroupMessage(
+		ctx,
+		groupID,
+		messageID,
+		userID,
+		nextContent,
+		nextTags,
+	)
+	if err != nil {
+		return GroupMessageWithCreator{}, err
+	}
+	creator, err := s.store.GetUserByID(ctx, updated.CreatorID)
+	if err != nil {
+		return GroupMessageWithCreator{}, err
+	}
+	return GroupMessageWithCreator{
+		Message: updated,
+		Creator: creator,
+	}, nil
+}
+
+func (s *GroupService) DeleteGroupMessage(
+	ctx context.Context,
+	userID int64,
+	groupID int64,
+	messageID int64,
+) error {
+	if err := s.ensureGroupMember(ctx, groupID, userID); err != nil {
+		return err
+	}
+	existing, err := s.store.GetGroupMessageByID(ctx, messageID)
+	if err != nil {
+		return err
+	}
+	if existing.GroupID != groupID {
+		return sql.ErrNoRows
+	}
+	if !canManageGroupMessage(existing, userID) {
+		return ErrGroupMessagePermissionDenied
+	}
+	return s.store.DeleteGroupMessage(ctx, groupID, messageID)
+}
+
 func (s *GroupService) ensureGroupMember(ctx context.Context, groupID int64, userID int64) error {
 	member, err := s.store.IsGroupMember(ctx, groupID, userID)
 	if err != nil {
@@ -254,4 +335,22 @@ func parseGroupPageToken(pageToken string) (int, error) {
 		return 0, fmt.Errorf("invalid page token")
 	}
 	return offset, nil
+}
+
+func canManageGroupMessage(message models.GroupMessage, userID int64) bool {
+	if message.CreatorID == userID {
+		return true
+	}
+	targetUserID := models.Int64ToString(userID)
+	for _, tag := range message.Tags {
+		normalized := strings.TrimSpace(tag)
+		if !strings.HasPrefix(normalized, "collab/") {
+			continue
+		}
+		collaboratorID := strings.TrimSpace(strings.TrimPrefix(normalized, "collab/"))
+		if collaboratorID == targetUserID {
+			return true
+		}
+	}
+	return false
 }

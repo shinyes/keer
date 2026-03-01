@@ -382,6 +382,104 @@ func (s *SQLStore) CreateGroupMessage(
 	return s.GetGroupMessageByID(ctx, messageID)
 }
 
+func (s *SQLStore) UpdateGroupMessage(
+	ctx context.Context,
+	groupID int64,
+	messageID int64,
+	actorID int64,
+	content string,
+	tags []string,
+) (models.GroupMessage, error) {
+	now := time.Now().UTC()
+	normalizedTags := normalizeGroupTags(tags)
+	normalizedContent := strings.TrimSpace(content)
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return models.GroupMessage{}, err
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	var existingGroupID int64
+	if err := tx.QueryRowContext(
+		ctx,
+		`SELECT group_id FROM group_messages WHERE id = ?`,
+		messageID,
+	).Scan(&existingGroupID); err != nil {
+		return models.GroupMessage{}, err
+	}
+	if existingGroupID != groupID {
+		return models.GroupMessage{}, sql.ErrNoRows
+	}
+
+	if err := upsertGroupTagsInTx(ctx, tx, groupID, actorID, normalizedTags); err != nil {
+		return models.GroupMessage{}, err
+	}
+
+	res, err := tx.ExecContext(
+		ctx,
+		`UPDATE group_messages
+		SET content = ?, update_time = ?
+		WHERE id = ? AND group_id = ?`,
+		normalizedContent,
+		now.Format(time.RFC3339Nano),
+		messageID,
+		groupID,
+	)
+	if err != nil {
+		return models.GroupMessage{}, err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return models.GroupMessage{}, err
+	}
+	if affected == 0 {
+		return models.GroupMessage{}, sql.ErrNoRows
+	}
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM group_message_tags WHERE message_id = ?`, messageID); err != nil {
+		return models.GroupMessage{}, err
+	}
+	for _, tag := range normalizedTags {
+		if _, err := tx.ExecContext(
+			ctx,
+			`INSERT INTO group_message_tags (message_id, group_id, tag_name, create_time)
+			VALUES (?, ?, ?, ?)`,
+			messageID,
+			groupID,
+			tag,
+			now.Format(time.RFC3339Nano),
+		); err != nil {
+			return models.GroupMessage{}, err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return models.GroupMessage{}, err
+	}
+	return s.GetGroupMessageByID(ctx, messageID)
+}
+
+func (s *SQLStore) DeleteGroupMessage(ctx context.Context, groupID int64, messageID int64) error {
+	res, err := s.db.ExecContext(
+		ctx,
+		`DELETE FROM group_messages WHERE id = ? AND group_id = ?`,
+		messageID,
+		groupID,
+	)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 func (s *SQLStore) GetGroupMessageByID(ctx context.Context, messageID int64) (models.GroupMessage, error) {
 	var msg models.GroupMessage
 	var createTime string

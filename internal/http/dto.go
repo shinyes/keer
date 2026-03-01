@@ -165,6 +165,11 @@ type createGroupMessageRequest struct {
 	Tags    []string `json:"tags,omitempty"`
 }
 
+type updateGroupMessageRequest struct {
+	Content *string   `json:"content"`
+	Tags    *[]string `json:"tags"`
+}
+
 type apiGroupMessage struct {
 	Name       string   `json:"name"`
 	Group      string   `json:"group"`

@@ -675,6 +675,71 @@ func NewRouter(
 		return c.JSON(toAPIGroupMessage(msg))
 	})
 
+	api.Patch("/groups/:id/messages/:messageId", func(c *fiber.Ctx) error {
+		currentUser := CurrentUser(c)
+		groupID, err := parseID(c.Params("id"))
+		if err != nil {
+			return badRequest(c, "invalid group id")
+		}
+		messageID, err := parseID(c.Params("messageId"))
+		if err != nil {
+			return badRequest(c, "invalid message id")
+		}
+		var req updateGroupMessageRequest
+		if err := c.BodyParser(&req); err != nil {
+			return badRequest(c, "invalid request body")
+		}
+
+		updated, err := groupService.UpdateGroupMessage(
+			c.Context(),
+			currentUser.ID,
+			groupID,
+			messageID,
+			req.Content,
+			req.Tags,
+		)
+		if err != nil {
+			switch {
+			case errors.Is(err, sql.ErrNoRows):
+				return notFound(c, "group message not found")
+			case errors.Is(err, service.ErrGroupMessagePermissionDenied):
+				return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"message": "forbidden"})
+			default:
+				return badRequest(c, err.Error())
+			}
+		}
+		return c.JSON(toAPIGroupMessage(updated))
+	})
+
+	api.Delete("/groups/:id/messages/:messageId", func(c *fiber.Ctx) error {
+		currentUser := CurrentUser(c)
+		groupID, err := parseID(c.Params("id"))
+		if err != nil {
+			return badRequest(c, "invalid group id")
+		}
+		messageID, err := parseID(c.Params("messageId"))
+		if err != nil {
+			return badRequest(c, "invalid message id")
+		}
+
+		if err := groupService.DeleteGroupMessage(
+			c.Context(),
+			currentUser.ID,
+			groupID,
+			messageID,
+		); err != nil {
+			switch {
+			case errors.Is(err, sql.ErrNoRows):
+				return notFound(c, "group message not found")
+			case errors.Is(err, service.ErrGroupMessagePermissionDenied):
+				return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"message": "forbidden"})
+			default:
+				return internalError(c, err)
+			}
+		}
+		return c.SendStatus(fiber.StatusNoContent)
+	})
+
 	api.Get("/groups/:id/tags", func(c *fiber.Ctx) error {
 		currentUser := CurrentUser(c)
 		groupID, err := parseID(c.Params("id"))
