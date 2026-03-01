@@ -225,7 +225,7 @@ func NewRouter(
 				continue
 			}
 			seenUserIDs[user.ID] = struct{}{}
-			resp.Users = append(resp.Users, toAPIUser(user))
+			resp.Users = append(resp.Users, toAPIUserSync(user))
 		}
 
 		return c.JSON(resp)
@@ -267,7 +267,7 @@ func NewRouter(
 			SyncAnchor: changes.SyncAnchor.Format(time.RFC3339Nano),
 		}
 		for _, user := range changes.Users {
-			resp.Users = append(resp.Users, toAPIUser(user))
+			resp.Users = append(resp.Users, toAPIUserSync(user))
 		}
 		return c.JSON(resp)
 	})
@@ -1205,6 +1205,20 @@ func toAPIUser(user models.User) apiUser {
 		AvatarURL:   user.AvatarURL,
 		State:       "NORMAL",
 		CreateTime:  formatMaybeTime(user.CreateTime),
+		UpdateTime:  formatMaybeTime(user.UpdateTime),
+	}
+}
+
+func toAPIUserSync(user models.User) apiUser {
+	name := ""
+	if user.ID > 0 {
+		name = user.Name()
+	}
+	return apiUser{
+		Name:        name,
+		Username:    user.Username,
+		DisplayName: user.DisplayName,
+		AvatarURL:   user.AvatarURL,
 		UpdateTime:  formatMaybeTime(user.UpdateTime),
 	}
 }

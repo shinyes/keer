@@ -104,26 +104,44 @@ func (s *UserService) ListUserChanges(
 		normalizedSince = normalizedAnchor
 	}
 
-	seenUserIDs := make(map[int64]struct{}, len(identifiers))
-	users := make([]models.User, 0, len(identifiers))
-	for _, identifier := range identifiers {
-		user, err := s.GetUserByIdentifier(ctx, identifier)
-		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				continue
+	userIDSet := make(map[int64]struct{}, len(identifiers))
+	usernameSet := make(map[string]struct{}, len(identifiers))
+	for _, raw := range identifiers {
+		identifier := normalizeUserIdentifier(raw)
+		if identifier == "" {
+			continue
+		}
+		if userID, err := strconv.ParseInt(identifier, 10, 64); err == nil {
+			if userID > 0 {
+				userIDSet[userID] = struct{}{}
 			}
-			return UserChanges{}, err
-		}
-		if _, exists := seenUserIDs[user.ID]; exists {
 			continue
 		}
-		seenUserIDs[user.ID] = struct{}{}
+		username := normalizeUsername(identifier)
+		if username == "" {
+			continue
+		}
+		usernameSet[username] = struct{}{}
+	}
 
-		updatedAt := user.UpdateTime.UTC()
-		if !updatedAt.After(normalizedSince) || updatedAt.After(normalizedAnchor) {
-			continue
-		}
-		users = append(users, user)
+	userIDs := make([]int64, 0, len(userIDSet))
+	for userID := range userIDSet {
+		userIDs = append(userIDs, userID)
+	}
+	usernames := make([]string, 0, len(usernameSet))
+	for username := range usernameSet {
+		usernames = append(usernames, username)
+	}
+
+	users, err := s.store.ListUsersByIdentifiersUpdatedWithin(
+		ctx,
+		userIDs,
+		usernames,
+		normalizedSince,
+		normalizedAnchor,
+	)
+	if err != nil {
+		return UserChanges{}, err
 	}
 
 	sort.SliceStable(users, func(i, j int) bool {

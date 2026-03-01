@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -241,6 +243,27 @@ func TestBatchGetUsersEndpoint(t *testing.T) {
 	}
 }
 
+func TestBatchGetUsersEndpoint_TooManyIDs(t *testing.T) {
+	app := newTestApp(t, true, true)
+
+	ids := make([]string, 0, 201)
+	for i := 1; i <= 201; i++ {
+		ids = append(ids, strconv.Itoa(i))
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/users/batch?ids="+url.QueryEscape(strings.Join(ids, ",")), nil)
+	req.Header.Set("Authorization", "Bearer demo-token")
+	resp, err := app.Test(req, 5000)
+	if err != nil {
+		t.Fatalf("batch get users request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 400, got %d body=%s", resp.StatusCode, string(body))
+	}
+}
+
 func TestGetUserChangesEndpoint(t *testing.T) {
 	app, userService := newTestAppWithUserService(t, true, true)
 
@@ -279,6 +302,29 @@ func TestGetUserChangesEndpoint(t *testing.T) {
 	}
 	if payload.Users[0].Username != "demo" {
 		t.Fatalf("expected changed user demo, got %q", payload.Users[0].Username)
+	}
+}
+
+func TestGetUserChangesEndpoint_TooManyIDs(t *testing.T) {
+	app := newTestApp(t, true, true)
+
+	ids := make([]string, 0, 201)
+	for i := 1; i <= 201; i++ {
+		ids = append(ids, strconv.Itoa(i))
+	}
+	since := time.Now().UTC().Add(-time.Minute).Format(time.RFC3339Nano)
+	endpoint := "/api/v1/users/changes?since=" + url.QueryEscape(since) + "&ids=" + url.QueryEscape(strings.Join(ids, ","))
+	req := httptest.NewRequest(http.MethodGet, endpoint, nil)
+	req.Header.Set("Authorization", "Bearer demo-token")
+	resp, err := app.Test(req, 5000)
+	if err != nil {
+		t.Fatalf("get user changes request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 400, got %d body=%s", resp.StatusCode, string(body))
 	}
 }
 
