@@ -150,6 +150,89 @@ func (s *SQLStore) GetUserByUsername(ctx context.Context, username string) (mode
 	return user, nil
 }
 
+func (s *SQLStore) ListUsersByIdentifiersUpdatedWithin(
+	ctx context.Context,
+	userIDs []int64,
+	usernames []string,
+	updatedAfter time.Time,
+	updatedBeforeOrEqual time.Time,
+) ([]models.User, error) {
+	if len(userIDs) == 0 && len(usernames) == 0 {
+		return []models.User{}, nil
+	}
+
+	query := `SELECT id, username, display_name, avatar_url, password_hash, role, default_visibility, create_time, update_time
+		FROM users
+		WHERE (`
+	args := make([]any, 0, len(userIDs)+len(usernames)+2)
+	conditions := make([]string, 0, 2)
+
+	if len(userIDs) > 0 {
+		placeholders := strings.TrimRight(strings.Repeat("?,", len(userIDs)), ",")
+		conditions = append(conditions, `id IN (`+placeholders+`)`)
+		for _, userID := range userIDs {
+			args = append(args, userID)
+		}
+	}
+	if len(usernames) > 0 {
+		placeholders := strings.TrimRight(strings.Repeat("?,", len(usernames)), ",")
+		conditions = append(conditions, `username COLLATE NOCASE IN (`+placeholders+`)`)
+		for _, username := range usernames {
+			args = append(args, username)
+		}
+	}
+
+	query += strings.Join(conditions, " OR ")
+	query += `)
+		AND update_time > ?
+		AND update_time <= ?
+		ORDER BY update_time ASC, id ASC`
+	args = append(args, updatedAfter.UTC().Format(time.RFC3339Nano))
+	args = append(args, updatedBeforeOrEqual.UTC().Format(time.RFC3339Nano))
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	users := make([]models.User, 0, len(userIDs)+len(usernames))
+	for rows.Next() {
+		var user models.User
+		var defaultVisibility string
+		var createTime string
+		var updateTime string
+		if err := rows.Scan(
+			&user.ID,
+			&user.Username,
+			&user.DisplayName,
+			&user.AvatarURL,
+			&user.PasswordHash,
+			&user.Role,
+			&defaultVisibility,
+			&createTime,
+			&updateTime,
+		); err != nil {
+			return nil, err
+		}
+		user.DefaultVisibility = models.Visibility(defaultVisibility)
+		user.CreateTime, err = parseTime(createTime)
+		if err != nil {
+			return nil, err
+		}
+		user.UpdateTime, err = parseTime(updateTime)
+		if err != nil {
+			return nil, err
+		}
+		users = append(users, user)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return users, nil
+}
+
 func (s *SQLStore) CreatePersonalAccessToken(ctx context.Context, userID int64, rawToken string, description string) (models.PersonalAccessToken, error) {
 	return s.CreatePersonalAccessTokenWithExpiry(ctx, userID, rawToken, description, nil)
 }
