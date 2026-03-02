@@ -1845,7 +1845,7 @@ func (s *SQLStore) hydrateMemoTags(ctx context.Context, memos []models.Memo) err
 	return nil
 }
 
-func normalizeTagNames(tags []string) []string {
+func NormalizeTagNames(tags []string) []string {
 	if len(tags) == 0 {
 		return []string{}
 	}
@@ -1864,6 +1864,10 @@ func normalizeTagNames(tags []string) []string {
 		out = append(out, tag)
 	}
 	return out
+}
+
+func normalizeTagNames(tags []string) []string {
+	return NormalizeTagNames(tags)
 }
 
 func scanMemo(scanner interface {

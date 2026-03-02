@@ -205,11 +205,7 @@ func (s *MemoService) DeleteMemo(ctx context.Context, requesterID int64, memoID 
 }
 
 func (s *MemoService) ListMemos(ctx context.Context, viewerID int64, state *models.MemoState, rawFilter string, pageSize int, pageToken string) ([]MemoWithAttachments, string, error) {
-	if containsContentDrivenFilter(rawFilter) {
-		return nil, "", fmt.Errorf("content-based filter is disabled")
-	}
-
-	filter, err := CompileMemoFilter(rawFilter)
+	filter, prefilter, err := compileMemoFilter(rawFilter)
 	if err != nil {
 		return nil, "", err
 	}
@@ -219,66 +215,28 @@ func (s *MemoService) ListMemos(ctx context.Context, viewerID int64, state *mode
 		state = &defaultState
 	}
 
-	prefilter := store.EmptyMemoPrefilter()
-	if filter != nil {
-		prefilter = filter.SQLPrefilter()
-	}
-
 	// 设置安全上限，避免一次性加载过多 memo 到内存
 	const maxMemoQueryLimit = 10000
-	allVisible, err := s.store.ListVisibleMemos(ctx, viewerID, state, prefilter, maxMemoQueryLimit, 0, nil)
+	filtered, err := s.listFilteredVisibleMemos(
+		ctx,
+		viewerID,
+		state,
+		filter,
+		prefilter,
+		maxMemoQueryLimit,
+		nil,
+	)
 	if err != nil {
 		return nil, "", err
 	}
 
-	filtered := make([]models.Memo, 0, len(allVisible))
-	for _, memo := range allVisible {
-		matched, err := filter.Matches(memo)
-		if err != nil {
-			return nil, "", err
-		}
-		if !matched {
-			continue
-		}
-		filtered = append(filtered, memo)
-	}
-
-	offset, err := parsePageToken(pageToken)
-	if err != nil {
-		return nil, "", fmt.Errorf("invalid pageToken")
-	}
-	if pageSize <= 0 {
-		pageSize = 50
-	}
-	if pageSize > 200 {
-		pageSize = 200
-	}
-
-	if offset >= len(filtered) {
-		return []MemoWithAttachments{}, "", nil
-	}
-	end := min(offset+pageSize, len(filtered))
-	page := filtered[offset:end]
-	nextToken := ""
-	if end < len(filtered) {
-		nextToken = strconv.Itoa(end)
-	}
-
-	memoIDs := make([]int64, 0, len(page))
-	for _, memo := range page {
-		memoIDs = append(memoIDs, memo.ID)
-	}
-	attachmentsMap, err := s.store.ListAttachmentsByMemoIDs(ctx, memoIDs)
+	page, nextToken, err := paginateMemos(filtered, pageSize, pageToken)
 	if err != nil {
 		return nil, "", err
 	}
-
-	out := make([]MemoWithAttachments, 0, len(page))
-	for _, memo := range page {
-		out = append(out, MemoWithAttachments{
-			Memo:        memo,
-			Attachments: attachmentsMap[memo.ID],
-		})
+	out, err := s.attachMemos(ctx, page)
+	if err != nil {
+		return nil, "", err
 	}
 	return out, nextToken, nil
 }
@@ -291,11 +249,7 @@ func (s *MemoService) ListMemoChanges(
 	since time.Time,
 	syncAnchor time.Time,
 ) (MemoChanges, error) {
-	if containsContentDrivenFilter(rawFilter) {
-		return MemoChanges{}, fmt.Errorf("content-based filter is disabled")
-	}
-
-	filter, err := CompileMemoFilter(rawFilter)
+	filter, prefilter, err := compileMemoFilter(rawFilter)
 	if err != nil {
 		return MemoChanges{}, err
 	}
@@ -309,21 +263,16 @@ func (s *MemoService) ListMemoChanges(
 		normalizedSince = normalizedAnchor
 	}
 
-	prefilter := store.EmptyMemoPrefilter()
-	if filter != nil {
-		prefilter = filter.SQLPrefilter()
-	}
-
 	// Incremental sync must return a complete window to avoid advancing
 	// the client anchor past unseen changes.
 	const noQueryLimit = 0
-	allVisible, err := s.store.ListVisibleMemos(
+	filtered, err := s.listFilteredVisibleMemos(
 		ctx,
 		viewerID,
 		state,
+		filter,
 		prefilter,
 		noQueryLimit,
-		0,
 		&store.MemoQueryBounds{
 			UpdatedAfter:         &normalizedSince,
 			UpdatedBeforeOrEqual: &normalizedAnchor,
@@ -333,34 +282,9 @@ func (s *MemoService) ListMemoChanges(
 		return MemoChanges{}, err
 	}
 
-	filtered := make([]models.Memo, 0, len(allVisible))
-	for _, memo := range allVisible {
-		matched, err := filter.Matches(memo)
-		if err != nil {
-			return MemoChanges{}, err
-		}
-		if !matched {
-			continue
-		}
-		filtered = append(filtered, memo)
-	}
-
-	memoIDs := make([]int64, 0, len(filtered))
-	for _, memo := range filtered {
-		memoIDs = append(memoIDs, memo.ID)
-	}
-
-	attachmentsMap, err := s.store.ListAttachmentsByMemoIDs(ctx, memoIDs)
+	changedMemos, err := s.attachMemos(ctx, filtered)
 	if err != nil {
 		return MemoChanges{}, err
-	}
-
-	changedMemos := make([]MemoWithAttachments, 0, len(filtered))
-	for _, memo := range filtered {
-		changedMemos = append(changedMemos, MemoWithAttachments{
-			Memo:        memo,
-			Attachments: attachmentsMap[memo.ID],
-		})
 	}
 
 	deletedMemoNames, err := s.store.ListDeletedVisibleMemoNames(
@@ -394,6 +318,107 @@ func (s *MemoService) GetUserTagCount(ctx context.Context, requestedUserID int64
 		}
 	}
 	return tagCount, nil
+}
+
+func compileMemoFilter(rawFilter string) (*CELMemoFilter, store.MemoSQLPrefilter, error) {
+	if containsContentDrivenFilter(rawFilter) {
+		return nil, store.EmptyMemoPrefilter(), fmt.Errorf("content-based filter is disabled")
+	}
+
+	filter, err := CompileMemoFilter(rawFilter)
+	if err != nil {
+		return nil, store.EmptyMemoPrefilter(), err
+	}
+
+	prefilter := store.EmptyMemoPrefilter()
+	if filter != nil {
+		prefilter = filter.SQLPrefilter()
+	}
+	return filter, prefilter, nil
+}
+
+func (s *MemoService) listFilteredVisibleMemos(
+	ctx context.Context,
+	viewerID int64,
+	state *models.MemoState,
+	filter *CELMemoFilter,
+	prefilter store.MemoSQLPrefilter,
+	limit int,
+	bounds *store.MemoQueryBounds,
+) ([]models.Memo, error) {
+	allVisible, err := s.store.ListVisibleMemos(
+		ctx,
+		viewerID,
+		state,
+		prefilter,
+		limit,
+		0,
+		bounds,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	filtered := make([]models.Memo, 0, len(allVisible))
+	for _, memo := range allVisible {
+		matched, err := filter.Matches(memo)
+		if err != nil {
+			return nil, err
+		}
+		if !matched {
+			continue
+		}
+		filtered = append(filtered, memo)
+	}
+	return filtered, nil
+}
+
+func paginateMemos(memos []models.Memo, pageSize int, pageToken string) ([]models.Memo, string, error) {
+	offset, err := parsePageToken(pageToken)
+	if err != nil {
+		return nil, "", fmt.Errorf("invalid pageToken")
+	}
+	if pageSize <= 0 {
+		pageSize = 50
+	}
+	if pageSize > 200 {
+		pageSize = 200
+	}
+
+	if offset >= len(memos) {
+		return []models.Memo{}, "", nil
+	}
+	end := min(offset+pageSize, len(memos))
+	nextToken := ""
+	if end < len(memos) {
+		nextToken = strconv.Itoa(end)
+	}
+	return memos[offset:end], nextToken, nil
+}
+
+func (s *MemoService) attachMemos(ctx context.Context, memos []models.Memo) ([]MemoWithAttachments, error) {
+	if len(memos) == 0 {
+		return []MemoWithAttachments{}, nil
+	}
+
+	memoIDs := make([]int64, 0, len(memos))
+	for _, memo := range memos {
+		memoIDs = append(memoIDs, memo.ID)
+	}
+
+	attachmentsMap, err := s.store.ListAttachmentsByMemoIDs(ctx, memoIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]MemoWithAttachments, 0, len(memos))
+	for _, memo := range memos {
+		out = append(out, MemoWithAttachments{
+			Memo:        memo,
+			Attachments: attachmentsMap[memo.ID],
+		})
+	}
+	return out, nil
 }
 
 func parsePageToken(pageToken string) (int, error) {
@@ -624,23 +649,7 @@ func parseResourceID(name string) (int64, error) {
 }
 
 func normalizeMemoTags(tags []string) []string {
-	if len(tags) == 0 {
-		return []string{}
-	}
-	normalized := make([]string, 0, len(tags))
-	seen := make(map[string]struct{}, len(tags))
-	for _, raw := range tags {
-		tag := strings.TrimSpace(raw)
-		if tag == "" {
-			continue
-		}
-		if _, exists := seen[tag]; exists {
-			continue
-		}
-		seen[tag] = struct{}{}
-		normalized = append(normalized, tag)
-	}
-	return normalized
+	return store.NormalizeTagNames(tags)
 }
 
 func validateCoordinates(latitude *float64, longitude *float64) error {

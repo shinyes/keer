@@ -566,14 +566,14 @@ func NewRouter(
 
 	api.Post("/groups/:id/join", func(c *fiber.Ctx) error {
 		currentUser := CurrentUser(c)
-		groupID, err := parseID(c.Params("id"))
+		groupID, err := parseRequiredIDParam(c, "id", "invalid group id")
 		if err != nil {
-			return badRequest(c, "invalid group id")
+			return err
 		}
 		group, err := groupService.JoinGroup(c.Context(), currentUser.ID, groupID)
 		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return notFound(c, "group not found")
+			if mapped := mapNoRowsToNotFound(c, err, "group not found"); mapped != nil {
+				return mapped
 			}
 			return internalError(c, err)
 		}
@@ -582,9 +582,9 @@ func NewRouter(
 
 	api.Patch("/groups/:id", func(c *fiber.Ctx) error {
 		currentUser := CurrentUser(c)
-		groupID, err := parseID(c.Params("id"))
+		groupID, err := parseRequiredIDParam(c, "id", "invalid group id")
 		if err != nil {
-			return badRequest(c, "invalid group id")
+			return err
 		}
 		var req updateGroupRequest
 		if err := c.BodyParser(&req); err != nil {
@@ -592,8 +592,8 @@ func NewRouter(
 		}
 		group, err := groupService.UpdateGroup(c.Context(), currentUser.ID, groupID, req.Name, req.Description)
 		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return notFound(c, "group not found")
+			if mapped := mapNoRowsToNotFound(c, err, "group not found"); mapped != nil {
+				return mapped
 			}
 			return badRequest(c, err.Error())
 		}
@@ -602,13 +602,13 @@ func NewRouter(
 
 	api.Delete("/groups/:id", func(c *fiber.Ctx) error {
 		currentUser := CurrentUser(c)
-		groupID, err := parseID(c.Params("id"))
+		groupID, err := parseRequiredIDParam(c, "id", "invalid group id")
 		if err != nil {
-			return badRequest(c, "invalid group id")
+			return err
 		}
 		if err := groupService.DeleteOrLeaveGroup(c.Context(), currentUser.ID, groupID); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return notFound(c, "group not found")
+			if mapped := mapNoRowsToNotFound(c, err, "group not found"); mapped != nil {
+				return mapped
 			}
 			return internalError(c, err)
 		}
@@ -617,9 +617,9 @@ func NewRouter(
 
 	api.Get("/groups/:id/messages", func(c *fiber.Ctx) error {
 		currentUser := CurrentUser(c)
-		groupID, err := parseID(c.Params("id"))
+		groupID, err := parseRequiredIDParam(c, "id", "invalid group id")
 		if err != nil {
-			return badRequest(c, "invalid group id")
+			return err
 		}
 		pageSize, _ := strconv.Atoi(strings.TrimSpace(c.Query("pageSize", "50")))
 		pageToken := c.Query("pageToken", "")
@@ -631,8 +631,8 @@ func NewRouter(
 			pageToken,
 		)
 		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return notFound(c, "group not found")
+			if mapped := mapNoRowsToNotFound(c, err, "group not found"); mapped != nil {
+				return mapped
 			}
 			if strings.Contains(strings.ToLower(err.Error()), "pagetoken") {
 				return badRequest(c, "invalid pageToken")
@@ -651,9 +651,9 @@ func NewRouter(
 
 	api.Post("/groups/:id/messages", func(c *fiber.Ctx) error {
 		currentUser := CurrentUser(c)
-		groupID, err := parseID(c.Params("id"))
+		groupID, err := parseRequiredIDParam(c, "id", "invalid group id")
 		if err != nil {
-			return badRequest(c, "invalid group id")
+			return err
 		}
 		var req createGroupMessageRequest
 		if err := c.BodyParser(&req); err != nil {
@@ -667,8 +667,8 @@ func NewRouter(
 			req.Tags,
 		)
 		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return notFound(c, "group not found")
+			if mapped := mapNoRowsToNotFound(c, err, "group not found"); mapped != nil {
+				return mapped
 			}
 			return badRequest(c, err.Error())
 		}
@@ -677,13 +677,13 @@ func NewRouter(
 
 	api.Patch("/groups/:id/messages/:messageId", func(c *fiber.Ctx) error {
 		currentUser := CurrentUser(c)
-		groupID, err := parseID(c.Params("id"))
+		groupID, err := parseRequiredIDParam(c, "id", "invalid group id")
 		if err != nil {
-			return badRequest(c, "invalid group id")
+			return err
 		}
-		messageID, err := parseID(c.Params("messageId"))
+		messageID, err := parseRequiredIDParam(c, "messageId", "invalid message id")
 		if err != nil {
-			return badRequest(c, "invalid message id")
+			return err
 		}
 		var req updateGroupMessageRequest
 		if err := c.BodyParser(&req); err != nil {
@@ -699,13 +699,8 @@ func NewRouter(
 			req.Tags,
 		)
 		if err != nil {
-			switch {
-			case errors.Is(err, sql.ErrNoRows):
-				return notFound(c, "group message not found")
-			case errors.Is(err, service.ErrGroupMessagePermissionDenied):
-				return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"message": "forbidden"})
-			default:
-				return badRequest(c, err.Error())
+			if mapped := mapGroupMessageMutationError(c, err, "group message not found", true); mapped != nil {
+				return mapped
 			}
 		}
 		return c.JSON(toAPIGroupMessage(updated))
@@ -713,13 +708,13 @@ func NewRouter(
 
 	api.Delete("/groups/:id/messages/:messageId", func(c *fiber.Ctx) error {
 		currentUser := CurrentUser(c)
-		groupID, err := parseID(c.Params("id"))
+		groupID, err := parseRequiredIDParam(c, "id", "invalid group id")
 		if err != nil {
-			return badRequest(c, "invalid group id")
+			return err
 		}
-		messageID, err := parseID(c.Params("messageId"))
+		messageID, err := parseRequiredIDParam(c, "messageId", "invalid message id")
 		if err != nil {
-			return badRequest(c, "invalid message id")
+			return err
 		}
 
 		if err := groupService.DeleteGroupMessage(
@@ -728,13 +723,8 @@ func NewRouter(
 			groupID,
 			messageID,
 		); err != nil {
-			switch {
-			case errors.Is(err, sql.ErrNoRows):
-				return notFound(c, "group message not found")
-			case errors.Is(err, service.ErrGroupMessagePermissionDenied):
-				return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"message": "forbidden"})
-			default:
-				return internalError(c, err)
+			if mapped := mapGroupMessageMutationError(c, err, "group message not found", false); mapped != nil {
+				return mapped
 			}
 		}
 		return c.SendStatus(fiber.StatusNoContent)
@@ -742,14 +732,14 @@ func NewRouter(
 
 	api.Get("/groups/:id/tags", func(c *fiber.Ctx) error {
 		currentUser := CurrentUser(c)
-		groupID, err := parseID(c.Params("id"))
+		groupID, err := parseRequiredIDParam(c, "id", "invalid group id")
 		if err != nil {
-			return badRequest(c, "invalid group id")
+			return err
 		}
 		tags, err := groupService.ListGroupTags(c.Context(), currentUser.ID, groupID)
 		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return notFound(c, "group not found")
+			if mapped := mapNoRowsToNotFound(c, err, "group not found"); mapped != nil {
+				return mapped
 			}
 			return internalError(c, err)
 		}
@@ -758,9 +748,9 @@ func NewRouter(
 
 	api.Post("/groups/:id/tags", func(c *fiber.Ctx) error {
 		currentUser := CurrentUser(c)
-		groupID, err := parseID(c.Params("id"))
+		groupID, err := parseRequiredIDParam(c, "id", "invalid group id")
 		if err != nil {
-			return badRequest(c, "invalid group id")
+			return err
 		}
 		var req addGroupTagRequest
 		if err := c.BodyParser(&req); err != nil {
@@ -768,8 +758,8 @@ func NewRouter(
 		}
 		tags, err := groupService.AddGroupTag(c.Context(), currentUser.ID, groupID, req.Tag)
 		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return notFound(c, "group not found")
+			if mapped := mapNoRowsToNotFound(c, err, "group not found"); mapped != nil {
+				return mapped
 			}
 			return badRequest(c, err.Error())
 		}
@@ -1416,6 +1406,39 @@ func parseID(raw string) (int64, error) {
 		return 0, fmt.Errorf("empty id")
 	}
 	return strconv.ParseInt(raw, 10, 64)
+}
+
+func parseRequiredIDParam(c *fiber.Ctx, param string, invalidMessage string) (int64, error) {
+	id, err := parseID(c.Params(param))
+	if err != nil {
+		return 0, badRequest(c, invalidMessage)
+	}
+	return id, nil
+}
+
+func mapNoRowsToNotFound(c *fiber.Ctx, err error, message string) error {
+	if errors.Is(err, sql.ErrNoRows) {
+		return notFound(c, message)
+	}
+	return nil
+}
+
+func mapGroupMessageMutationError(
+	c *fiber.Ctx,
+	err error,
+	notFoundMessage string,
+	badRequestFallback bool,
+) error {
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return notFound(c, notFoundMessage)
+	case errors.Is(err, service.ErrGroupMessagePermissionDenied):
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"message": "forbidden"})
+	case badRequestFallback:
+		return badRequest(c, err.Error())
+	default:
+		return internalError(c, err)
+	}
 }
 
 func parseBatchIdentifiers(raw string) []string {
