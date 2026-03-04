@@ -53,6 +53,7 @@ func (s *MemoService) ListMemoChanges(
 	if err != nil {
 		return MemoChanges{}, err
 	}
+	_ = viewerID
 
 	deletedMemoNames, err := s.store.ListDeletedVisibleMemoNames(
 		ctx,

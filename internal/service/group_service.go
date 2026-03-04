@@ -215,10 +215,11 @@ func (s *GroupService) CreateGroupMessage(
 	if err != nil {
 		return GroupMessageWithCreator{}, err
 	}
-	return GroupMessageWithCreator{
+	result := GroupMessageWithCreator{
 		Message: msg,
 		Creator: creator,
-	}, nil
+	}
+	return result, nil
 }
 
 func (s *GroupService) UpdateGroupMessage(
@@ -255,7 +256,6 @@ func (s *GroupService) UpdateGroupMessage(
 	if tags != nil {
 		nextTags = *tags
 	}
-
 	updated, err := s.store.UpdateGroupMessage(
 		ctx,
 		groupID,
@@ -271,10 +271,11 @@ func (s *GroupService) UpdateGroupMessage(
 	if err != nil {
 		return GroupMessageWithCreator{}, err
 	}
-	return GroupMessageWithCreator{
+	result := GroupMessageWithCreator{
 		Message: updated,
 		Creator: creator,
-	}, nil
+	}
+	return result, nil
 }
 
 func (s *GroupService) DeleteGroupMessage(

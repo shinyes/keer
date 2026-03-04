@@ -43,6 +43,7 @@ func (s *MemoService) ListMemos(ctx context.Context, viewerID int64, state *mode
 	if err != nil {
 		return nil, "", err
 	}
+	_ = viewerID
 	return out, nextToken, nil
 }
 

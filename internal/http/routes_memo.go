@@ -171,7 +171,6 @@ func registerMemoRoutes(
 			}
 			attachmentNames = &names
 		}
-
 		updated, err := memoService.UpdateMemo(
 			c.Context(),
 			currentUser.ID,

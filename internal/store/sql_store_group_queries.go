@@ -416,16 +416,14 @@ func (s *SQLStore) UpdateGroupMessage(
 		return models.GroupMessage{}, err
 	}
 
-	res, err := tx.ExecContext(
-		ctx,
-		`UPDATE group_messages
-		SET content = ?, update_time = ?
-		WHERE id = ? AND group_id = ?`,
+	query := `UPDATE group_messages SET content = ?, update_time = ?`
+	args := []any{
 		normalizedContent,
 		now.Format(time.RFC3339Nano),
-		messageID,
-		groupID,
-	)
+	}
+	query += ` WHERE id = ? AND group_id = ?`
+	args = append(args, messageID, groupID)
+	res, err := tx.ExecContext(ctx, query, args...)
 	if err != nil {
 		return models.GroupMessage{}, err
 	}

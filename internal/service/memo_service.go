@@ -99,10 +99,11 @@ func (s *MemoService) CreateMemo(ctx context.Context, creatorID int64, input Cre
 		return MemoWithAttachments{}, err
 	}
 
-	return MemoWithAttachments{
+	result := MemoWithAttachments{
 		Memo:        memo,
 		Attachments: attachmentsMap[memo.ID],
-	}, nil
+	}
+	return result, nil
 }
 
 func (s *MemoService) UpdateMemo(ctx context.Context, updaterID int64, memoID int64, input UpdateMemoInput) (MemoWithAttachments, error) {
@@ -184,10 +185,11 @@ func (s *MemoService) UpdateMemo(ctx context.Context, updaterID int64, memoID in
 		return MemoWithAttachments{}, err
 	}
 
-	return MemoWithAttachments{
+	result := MemoWithAttachments{
 		Memo:        updatedMemo,
 		Attachments: attachmentsMap[memoID],
-	}, nil
+	}
+	return result, nil
 }
 
 func (s *MemoService) DeleteMemo(ctx context.Context, requesterID int64, memoID int64) error {
