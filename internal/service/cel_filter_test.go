@@ -8,7 +8,7 @@ import (
 )
 
 func TestCompileMemoFilter_SQLPrefilterBasic(t *testing.T) {
-	filter, err := CompileMemoFilter(`creator_id == 7 && visibility in ["PRIVATE","PROTECTED"] && "book" in tags && property.hasLink == true`)
+	filter, err := CompileMemoFilter(`creator_id == 7 && visibility in ["PRIVATE","PROTECTED"] && "book" in tags`)
 	if err != nil {
 		t.Fatalf("CompileMemoFilter() error = %v", err)
 	}
@@ -25,9 +25,6 @@ func TestCompileMemoFilter_SQLPrefilterBasic(t *testing.T) {
 	}
 	if !containsVisibility(pf.VisibilityIn, models.VisibilityPrivate) || !containsVisibility(pf.VisibilityIn, models.VisibilityProtected) {
 		t.Fatalf("unexpected visibilityIn values: %+v", pf.VisibilityIn)
-	}
-	if pf.HasLink == nil || !*pf.HasLink {
-		t.Fatalf("expected HasLink=true in prefilter")
 	}
 	if len(pf.TagGroups) != 1 {
 		t.Fatalf("expected one tag group, got %d", len(pf.TagGroups))
@@ -62,7 +59,7 @@ func TestCompileMemoFilter_SQLPrefilterORUnion(t *testing.T) {
 }
 
 func TestCompileMemoFilter_SQLPrefilterORWithUnconstrainedBranch(t *testing.T) {
-	filter, err := CompileMemoFilter(`creator_id == 1 || pinned == true || content.contains("x")`)
+	filter, err := CompileMemoFilter(`creator_id == 1 || pinned == true || true`)
 	if err != nil {
 		t.Fatalf("CompileMemoFilter() error = %v", err)
 	}
@@ -114,16 +111,13 @@ func TestCompileMemoFilter_SQLPrefilterLegacyTagIn(t *testing.T) {
 }
 
 func TestCompileMemoFilter_SQLPrefilterNotEqual(t *testing.T) {
-	filter, err := CompileMemoFilter(`pinned != true && visibility != "PUBLIC" && state != "ARCHIVED" && property.hasCode != false`)
+	filter, err := CompileMemoFilter(`pinned != true && visibility != "PUBLIC" && state != "ARCHIVED"`)
 	if err != nil {
 		t.Fatalf("CompileMemoFilter() error = %v", err)
 	}
 	pf := filter.SQLPrefilter()
 	if pf.Pinned == nil || *pf.Pinned != false {
 		t.Fatalf("expected pinned=false, got %+v", pf.Pinned)
-	}
-	if pf.HasCode == nil || *pf.HasCode != true {
-		t.Fatalf("expected hasCode=true, got %+v", pf.HasCode)
 	}
 	if len(pf.VisibilityIn) != 2 || !containsVisibility(pf.VisibilityIn, models.VisibilityPrivate) || !containsVisibility(pf.VisibilityIn, models.VisibilityProtected) {
 		t.Fatalf("unexpected visibilityIn for != PUBLIC: %+v", pf.VisibilityIn)

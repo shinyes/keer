@@ -46,7 +46,6 @@ func CompileMemoFilter(raw string) (*CELMemoFilter, error) {
 	if err != nil {
 		return nil, err
 	}
-	rewritten = rewritePropertySelectors(rewritten)
 
 	env, err := cel.NewEnv(
 		cel.Declarations(
@@ -54,13 +53,7 @@ func CompileMemoFilter(raw string) (*CELMemoFilter, error) {
 			decls.NewVar("visibility", decls.String),
 			decls.NewVar("state", decls.String),
 			decls.NewVar("pinned", decls.Bool),
-			decls.NewVar("content", decls.String),
 			decls.NewVar("tags", decls.NewListType(decls.String)),
-			decls.NewVar("property", decls.NewMapType(decls.String, decls.Bool)),
-			decls.NewVar("has_link", decls.Bool),
-			decls.NewVar("has_task_list", decls.Bool),
-			decls.NewVar("has_code", decls.Bool),
-			decls.NewVar("has_incomplete_tasks", decls.Bool),
 		),
 	)
 	if err != nil {
@@ -87,25 +80,12 @@ func (f *CELMemoFilter) Matches(memo models.Memo) (bool, error) {
 	if f == nil {
 		return true, nil
 	}
-	property := map[string]bool{
-		"hasLink":            memo.Payload.Property.HasLink,
-		"hasTaskList":        memo.Payload.Property.HasTaskList,
-		"hasCode":            memo.Payload.Property.HasCode,
-		"hasIncompleteTasks": memo.Payload.Property.HasIncompleteTasks,
-	}
-
 	out, _, err := f.program.Eval(map[string]any{
-		"creator_id":           memo.CreatorID,
-		"visibility":           string(memo.Visibility),
-		"state":                string(memo.State),
-		"pinned":               memo.Pinned,
-		"content":              memo.Content,
-		"tags":                 memo.Payload.Tags,
-		"property":             property,
-		"has_link":             memo.Payload.Property.HasLink,
-		"has_task_list":        memo.Payload.Property.HasTaskList,
-		"has_code":             memo.Payload.Property.HasCode,
-		"has_incomplete_tasks": memo.Payload.Property.HasIncompleteTasks,
+		"creator_id": memo.CreatorID,
+		"visibility": string(memo.Visibility),
+		"state":      string(memo.State),
+		"pinned":     memo.Pinned,
+		"tags":       memo.Payload.Tags,
 	})
 	if err != nil {
 		return false, fmt.Errorf("evaluate CEL filter: %w", err)
@@ -179,16 +159,6 @@ func celQuote(s string) string {
 	s = strings.ReplaceAll(s, `\`, `\\`)
 	s = strings.ReplaceAll(s, `"`, `\"`)
 	return s
-}
-
-func rewritePropertySelectors(input string) string {
-	replacer := strings.NewReplacer(
-		"property.hasLink", "has_link",
-		"property.hasTaskList", "has_task_list",
-		"property.hasCode", "has_code",
-		"property.hasIncompleteTasks", "has_incomplete_tasks",
-	)
-	return replacer.Replace(input)
 }
 
 func buildSQLPrefilter(expr *exprpb.Expr) store.MemoSQLPrefilter {
