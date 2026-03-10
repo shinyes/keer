@@ -189,3 +189,13 @@ Memo 接口：
 go test ./...
 go vet ./...
 ```
+
+## Docker Image Release
+
+- Backend Docker image is built from [`Dockerfile`](./Dockerfile).
+- GitHub Actions workflow: `.github/workflows/release-backend-docker.yml`
+- Publish target: `ghcr.io/<owner>/<repo>:<version>` and `:latest` for stable versions.
+- Trigger mode (push tag):
+  - `1.2.3`
+  - `1.2.3-alpha.1`
+  - `1.2.3-beta.1`

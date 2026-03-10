@@ -106,6 +106,7 @@ func toAPIMemo(
 	if tags == nil {
 		tags = []string{}
 	}
+	quote := toAPIMemoQuote(memo.Quote, attachmentMapper)
 	return apiMemo{
 		Name:        memo.Memo.Name(),
 		State:       string(memo.Memo.State),
@@ -119,7 +120,49 @@ func toAPIMemo(
 		Longitude:   memo.Memo.Longitude,
 		Attachments: attachments,
 		Tags:        tags,
+		Quote:       quote,
 	}
+}
+
+func toAPIMemoQuote(
+	quote *service.MemoQuote,
+	attachmentMapper func(attachment models.Attachment, memoName string) apiAttachment,
+) *apiMemoQuote {
+	if quote == nil {
+		return nil
+	}
+	out := &apiMemoQuote{
+		SourceKind: string(quote.SourceKind),
+		Source:     quote.Source,
+	}
+	if quote.Memo == nil {
+		return out
+	}
+
+	referenced := quote.Memo
+	referencedAttachments := make([]apiAttachment, 0, len(referenced.Attachments))
+	for _, attachment := range referenced.Attachments {
+		if attachmentMapper != nil {
+			referencedAttachments = append(referencedAttachments, attachmentMapper(attachment, referenced.Memo.Name()))
+			continue
+		}
+		referencedAttachments = append(referencedAttachments, toAPIAttachment(attachment, referenced.Memo.Name(), "", ""))
+	}
+	tags := referenced.Memo.Payload.Tags
+	if tags == nil {
+		tags = []string{}
+	}
+	out.Memo = &apiMemoQuoteMemo{
+		Name:        referenced.Memo.Name(),
+		Creator:     "users/" + models.Int64ToString(referenced.Memo.CreatorID),
+		CreateTime:  formatMaybeTime(referenced.Memo.CreateTime),
+		UpdateTime:  formatMaybeTime(referenced.Memo.UpdateTime),
+		Content:     referenced.Memo.Content,
+		Visibility:  string(referenced.Memo.Visibility),
+		Attachments: referencedAttachments,
+		Tags:        tags,
+	}
+	return out
 }
 
 func toAPIAttachment(attachment models.Attachment, memoName string, directLink string, directThumbnailLink string) apiAttachment {

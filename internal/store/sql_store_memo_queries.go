@@ -445,6 +445,72 @@ func (s *SQLStore) ListVisibleMemos(
 	return memos, nil
 }
 
+func (s *SQLStore) ListVisibleMemosByIDs(ctx context.Context, viewerID int64, memoIDs []int64) ([]models.Memo, error) {
+	normalizedIDs := make([]int64, 0, len(memoIDs))
+	seen := make(map[int64]struct{}, len(memoIDs))
+	for _, memoID := range memoIDs {
+		if memoID <= 0 {
+			continue
+		}
+		if _, exists := seen[memoID]; exists {
+			continue
+		}
+		seen[memoID] = struct{}{}
+		normalizedIDs = append(normalizedIDs, memoID)
+	}
+	if len(normalizedIDs) == 0 {
+		return []models.Memo{}, nil
+	}
+
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(normalizedIDs)), ",")
+	collaboratorTag := fmt.Sprintf("collab/%d", viewerID)
+	query := fmt.Sprintf(
+		`SELECT m.id, m.creator_id, m.content, m.visibility, m.state, m.pinned, m.create_time, m.update_time, m.display_time, m.latitude, m.longitude, m.has_link, m.has_task_list, m.has_code, m.has_incomplete_tasks
+		FROM memos m
+		WHERE m.id IN (%s)
+			AND (
+				m.creator_id = ?
+				OR m.visibility IN ('PUBLIC', 'PROTECTED')
+				OR EXISTS (
+					SELECT 1
+					FROM memo_tags mt
+					JOIN tags t ON t.id = mt.tag_id
+					WHERE mt.memo_id = m.id AND t.name = ?
+				)
+			)
+		ORDER BY m.id ASC`,
+		placeholders,
+	)
+
+	args := make([]any, 0, len(normalizedIDs)+2)
+	for _, memoID := range normalizedIDs {
+		args = append(args, memoID)
+	}
+	args = append(args, viewerID, collaboratorTag)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make([]models.Memo, 0, len(normalizedIDs))
+	for rows.Next() {
+		memo, err := scanMemo(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, memo)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := s.hydrateMemoTags(ctx, result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 func (s *SQLStore) ListDeletedVisibleMemoNames(
 	ctx context.Context,
 	viewerID int64,

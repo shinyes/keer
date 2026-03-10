@@ -49,7 +49,7 @@ func (s *MemoService) ListMemoChanges(
 		return MemoChanges{}, err
 	}
 
-	changedMemos, err := s.attachMemos(ctx, filtered)
+	changedMemos, err := s.attachMemos(ctx, viewerID, filtered)
 	if err != nil {
 		return MemoChanges{}, err
 	}

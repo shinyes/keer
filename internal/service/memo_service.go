@@ -46,6 +46,7 @@ type UpdateMemoInput struct {
 type MemoWithAttachments struct {
 	Memo        models.Memo
 	Attachments []models.Attachment
+	Quote       *MemoQuote
 }
 
 type MemoChanges struct {
@@ -94,16 +95,14 @@ func (s *MemoService) CreateMemo(ctx context.Context, creatorID int64, input Cre
 	if err != nil {
 		return MemoWithAttachments{}, err
 	}
-	attachmentsMap, err := s.store.ListAttachmentsByMemoIDs(ctx, []int64{memo.ID})
+	attached, err := s.attachMemos(ctx, creatorID, []models.Memo{memo})
 	if err != nil {
 		return MemoWithAttachments{}, err
 	}
-
-	result := MemoWithAttachments{
-		Memo:        memo,
-		Attachments: attachmentsMap[memo.ID],
+	if len(attached) == 0 {
+		return MemoWithAttachments{}, sql.ErrNoRows
 	}
-	return result, nil
+	return attached[0], nil
 }
 
 func (s *MemoService) UpdateMemo(ctx context.Context, updaterID int64, memoID int64, input UpdateMemoInput) (MemoWithAttachments, error) {
@@ -179,17 +178,14 @@ func (s *MemoService) UpdateMemo(ctx context.Context, updaterID int64, memoID in
 	if err != nil {
 		return MemoWithAttachments{}, err
 	}
-
-	attachmentsMap, err := s.store.ListAttachmentsByMemoIDs(ctx, []int64{memoID})
+	attached, err := s.attachMemos(ctx, updaterID, []models.Memo{updatedMemo})
 	if err != nil {
 		return MemoWithAttachments{}, err
 	}
-
-	result := MemoWithAttachments{
-		Memo:        updatedMemo,
-		Attachments: attachmentsMap[memoID],
+	if len(attached) == 0 {
+		return MemoWithAttachments{}, sql.ErrNoRows
 	}
-	return result, nil
+	return attached[0], nil
 }
 
 func (s *MemoService) DeleteMemo(ctx context.Context, requesterID int64, memoID int64) error {

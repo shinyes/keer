@@ -39,7 +39,7 @@ func (s *MemoService) ListMemos(ctx context.Context, viewerID int64, state *mode
 	if err != nil {
 		return nil, "", err
 	}
-	out, err := s.attachMemos(ctx, page)
+	out, err := s.attachMemos(ctx, viewerID, page)
 	if err != nil {
 		return nil, "", err
 	}

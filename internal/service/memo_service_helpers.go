@@ -28,7 +28,7 @@ func compileMemoFilter(rawFilter string) (*CELMemoFilter, store.MemoSQLPrefilter
 	return filter, prefilter, nil
 }
 
-func (s *MemoService) attachMemos(ctx context.Context, memos []models.Memo) ([]MemoWithAttachments, error) {
+func (s *MemoService) attachMemos(ctx context.Context, viewerID int64, memos []models.Memo) ([]MemoWithAttachments, error) {
 	if len(memos) == 0 {
 		return []MemoWithAttachments{}, nil
 	}
@@ -43,12 +43,66 @@ func (s *MemoService) attachMemos(ctx context.Context, memos []models.Memo) ([]M
 		return nil, err
 	}
 
+	quoteDescriptorsByMemoID := make(map[int64]MemoQuoteDescriptor)
+	referencedMemoIDs := make([]int64, 0)
+	referencedMemoIDSet := make(map[int64]struct{})
+	for _, memo := range memos {
+		descriptor, ok := parseMemoQuoteDescriptor(memo.Payload.Tags)
+		if !ok {
+			continue
+		}
+		quoteDescriptorsByMemoID[memo.ID] = descriptor
+		referencedMemoID, resolvable := parseMemoIDFromQuoteSource(descriptor.Source)
+		if !resolvable {
+			continue
+		}
+		if _, exists := referencedMemoIDSet[referencedMemoID]; exists {
+			continue
+		}
+		referencedMemoIDSet[referencedMemoID] = struct{}{}
+		referencedMemoIDs = append(referencedMemoIDs, referencedMemoID)
+	}
+
+	referencedMemoByID := make(map[int64]MemoWithAttachments)
+	if len(referencedMemoIDs) > 0 {
+		referencedMemos, err := s.store.ListVisibleMemosByIDs(ctx, viewerID, referencedMemoIDs)
+		if err != nil {
+			return nil, err
+		}
+		referencedAttachmentsMap, err := s.store.ListAttachmentsByMemoIDs(ctx, referencedMemoIDs)
+		if err != nil {
+			return nil, err
+		}
+		for _, referenced := range referencedMemos {
+			referencedMemoByID[referenced.ID] = MemoWithAttachments{
+				Memo:        referenced,
+				Attachments: referencedAttachmentsMap[referenced.ID],
+			}
+		}
+	}
+
 	out := make([]MemoWithAttachments, 0, len(memos))
 	for _, memo := range memos {
-		out = append(out, MemoWithAttachments{
+		item := MemoWithAttachments{
 			Memo:        memo,
 			Attachments: attachmentsMap[memo.ID],
-		})
+		}
+		if descriptor, ok := quoteDescriptorsByMemoID[memo.ID]; ok {
+			quote := &MemoQuote{
+				SourceKind: descriptor.SourceKind,
+				Source:     descriptor.Source,
+			}
+			if referencedMemoID, resolvable := parseMemoIDFromQuoteSource(descriptor.Source); resolvable {
+				if referenced, exists := referencedMemoByID[referencedMemoID]; exists {
+					quote.Memo = &MemoQuoteMemo{
+						Memo:        referenced.Memo,
+						Attachments: referenced.Attachments,
+					}
+				}
+			}
+			item.Quote = quote
+		}
+		out = append(out, item)
 	}
 	return out, nil
 }
