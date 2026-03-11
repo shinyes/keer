@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -211,14 +212,18 @@ func isFilterIdentifierPart(ch rune) bool {
 	return ch == '_' || unicode.IsLetter(ch) || unicode.IsDigit(ch)
 }
 
-func (s *MemoService) resolveAttachmentIDsFromNames(ctx context.Context, userID int64, names []string) ([]int64, error) {
-	if len(names) == 0 {
-		return []int64{}, nil
+func (s *MemoService) resolveAttachmentBindingsFromCreateInput(
+	ctx context.Context,
+	userID int64,
+	bindings []AttachmentBindingInput,
+) ([]store.AttachmentBinding, error) {
+	if len(bindings) == 0 {
+		return []store.AttachmentBinding{}, nil
 	}
-	ids := make([]int64, 0, len(names))
+	resolved := make([]store.AttachmentBinding, 0, len(bindings))
 	seen := make(map[int64]struct{})
-	for _, name := range names {
-		id, err := parseResourceID(name)
+	for _, binding := range bindings {
+		id, err := parseResourceID(binding.Name)
 		if err != nil {
 			return nil, err
 		}
@@ -233,26 +238,29 @@ func (s *MemoService) resolveAttachmentIDsFromNames(ctx context.Context, userID 
 			return nil, fmt.Errorf("attachment %d not found", id)
 		}
 		seen[id] = struct{}{}
-		ids = append(ids, id)
+		resolved = append(resolved, store.AttachmentBinding{
+			AttachmentID:                  id,
+			AssociationEncryptionMetadata: strings.TrimSpace(binding.AssociationEncryptionMetadata),
+		})
 	}
-	return ids, nil
+	return resolved, nil
 }
 
-func (s *MemoService) resolveAttachmentIDsForMemoUpdate(
+func (s *MemoService) resolveAttachmentBindingsForMemoUpdate(
 	ctx context.Context,
 	updaterID int64,
 	memoCreatorID int64,
 	memoID int64,
-	names []string,
-) ([]int64, error) {
-	if len(names) == 0 {
-		return []int64{}, nil
+	bindings []AttachmentBindingInput,
+) ([]store.AttachmentBinding, error) {
+	if len(bindings) == 0 {
+		return []store.AttachmentBinding{}, nil
 	}
 
-	ids := make([]int64, 0, len(names))
+	resolved := make([]store.AttachmentBinding, 0, len(bindings))
 	seen := make(map[int64]struct{})
-	for _, name := range names {
-		id, err := parseResourceID(name)
+	for _, binding := range bindings {
+		id, err := parseResourceID(binding.Name)
 		if err != nil {
 			return nil, err
 		}
@@ -260,7 +268,10 @@ func (s *MemoService) resolveAttachmentIDsForMemoUpdate(
 			continue
 		}
 		seen[id] = struct{}{}
-		ids = append(ids, id)
+		resolved = append(resolved, store.AttachmentBinding{
+			AttachmentID:                  id,
+			AssociationEncryptionMetadata: strings.TrimSpace(binding.AssociationEncryptionMetadata),
+		})
 	}
 
 	existingMap, err := s.store.ListAttachmentsByMemoIDs(ctx, []int64{memoID})
@@ -272,12 +283,12 @@ func (s *MemoService) resolveAttachmentIDsForMemoUpdate(
 		existingAttachmentIDs[attachment.ID] = struct{}{}
 	}
 
-	for _, id := range ids {
-		if _, alreadyAttached := existingAttachmentIDs[id]; alreadyAttached {
+	for _, binding := range resolved {
+		if _, alreadyAttached := existingAttachmentIDs[binding.AttachmentID]; alreadyAttached {
 			continue
 		}
 
-		belongsToUpdater, err := s.store.AttachmentBelongsToUser(ctx, id, updaterID)
+		belongsToUpdater, err := s.store.AttachmentBelongsToUser(ctx, binding.AttachmentID, updaterID)
 		if err != nil {
 			return nil, err
 		}
@@ -286,7 +297,7 @@ func (s *MemoService) resolveAttachmentIDsForMemoUpdate(
 		}
 
 		if memoCreatorID != updaterID {
-			belongsToCreator, err := s.store.AttachmentBelongsToUser(ctx, id, memoCreatorID)
+			belongsToCreator, err := s.store.AttachmentBelongsToUser(ctx, binding.AttachmentID, memoCreatorID)
 			if err != nil {
 				return nil, err
 			}
@@ -295,10 +306,10 @@ func (s *MemoService) resolveAttachmentIDsForMemoUpdate(
 			}
 		}
 
-		return nil, fmt.Errorf("attachment %d not found", id)
+		return nil, fmt.Errorf("attachment %d not found", binding.AttachmentID)
 	}
 
-	return ids, nil
+	return resolved, nil
 }
 
 func canManageMemo(memo models.Memo, userID int64) bool {
@@ -336,6 +347,62 @@ func parseResourceID(name string) (int64, error) {
 
 func normalizeMemoTags(tags []string) []string {
 	return store.NormalizeTagNames(tags)
+}
+
+type collaboratorPayloadEnvelope struct {
+	WrappedKeys []collaboratorPayloadWrappedKey `json:"wrappedKeys"`
+}
+
+type collaboratorPayloadWrappedKey struct {
+	SlotType string `json:"slotType"`
+	SlotRef  string `json:"slotRef"`
+}
+
+func mergeCollaboratorTags(tags []string, payloadEnvelope string) []string {
+	merged := make([]string, 0, len(tags))
+	merged = append(merged, tags...)
+	trimmedEnvelope := strings.TrimSpace(payloadEnvelope)
+	if trimmedEnvelope == "" {
+		return merged
+	}
+	var envelope collaboratorPayloadEnvelope
+	if err := json.Unmarshal([]byte(trimmedEnvelope), &envelope); err != nil {
+		return merged
+	}
+	for _, wrappedKey := range envelope.WrappedKeys {
+		if strings.TrimSpace(wrappedKey.SlotType) != "account_public" {
+			continue
+		}
+		userID, ok := collaboratorIDFromWrappedSlotRef(wrappedKey.SlotRef)
+		if !ok {
+			continue
+		}
+		merged = append(merged, fmt.Sprintf("collab/%d", userID))
+	}
+	return merged
+}
+
+func collaboratorIDFromWrappedSlotRef(slotRef string) (int64, bool) {
+	slotRef = strings.TrimSpace(slotRef)
+	if slotRef == "" {
+		return 0, false
+	}
+	slotRef = strings.Trim(slotRef, "/")
+	if idx := strings.LastIndex(slotRef, "/"); idx >= 0 {
+		slotRef = slotRef[idx+1:]
+	}
+	userID, err := strconv.ParseInt(slotRef, 10, 64)
+	if err != nil || userID <= 0 {
+		return 0, false
+	}
+	return userID, true
+}
+
+func stringValue(ptr *string) string {
+	if ptr == nil {
+		return ""
+	}
+	return *ptr
 }
 
 func validateCoordinates(latitude *float64, longitude *float64) error {

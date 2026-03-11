@@ -1,40 +1,31 @@
-FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS builder
+# syntax=docker/dockerfile:1.7
+
+FROM --platform=$BUILDPLATFORM golang:1.25.5-bookworm AS build
 
 WORKDIR /src
-
-RUN apk add --no-cache ca-certificates
-
 COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
 
-ARG TARGETOS
-ARG TARGETARCH
-RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
-    go build -trimpath -ldflags="-s -w" -o /out/keer-server ./cmd/server
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
 
-FROM alpine:3.21
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -trimpath -ldflags="-s -w" -o /out/keer ./cmd/server
 
-RUN apk add --no-cache ca-certificates tzdata && \
-    addgroup -S keer && \
-    adduser -S -G keer keer
+FROM gcr.io/distroless/base-debian12:nonroot
 
 WORKDIR /app
 
-COPY --from=builder /out/keer-server /usr/local/bin/keer-server
+COPY --from=build /out/keer /app/keer
 
-RUN mkdir -p /app/data/uploads && \
-    chown -R keer:keer /app
-
-ENV APP_ADDR=:12843 \
-    BASE_URL=http://localhost:12843 \
-    DB_PATH=/app/data/keer.db \
-    UPLOADS_DIR=/app/data/uploads
+ENV APP_ADDR=:12843
+ENV BASE_URL=http://localhost:12843
+ENV DB_PATH=/data/keer.db
+ENV UPLOADS_DIR=/data/uploads
 
 EXPOSE 12843
-VOLUME ["/app/data"]
+VOLUME ["/data"]
 
-USER keer
-
-ENTRYPOINT ["/usr/local/bin/keer-server"]
+ENTRYPOINT ["/app/keer"]

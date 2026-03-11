@@ -61,7 +61,7 @@ func runServe(args []string) {
 	}
 	if *consoleMode {
 		log.Printf("runtime admin console enabled")
-		go runRuntimeConsole(cfg, container.UserService, container.StorageService)
+		go runRuntimeConsole(cfg, container.UserService)
 	}
 	log.Fatal(container.Router.Listen(container.Config.Addr))
 }
@@ -89,11 +89,10 @@ func runAdmin(args []string) error {
 
 	sqlStore := store.New(sqliteDB)
 	userService := service.NewUserService(sqlStore)
-	storageService := service.NewStorageSettingsService(sqlStore)
-	return executeAdminCommand(context.Background(), cfg.AllowRegistration, userService, storageService, args, os.Stdin)
+	return executeAdminCommand(context.Background(), cfg.AllowRegistration, userService, args)
 }
 
-func executeAdminCommand(ctx context.Context, allowRegistrationFallback bool, userService *service.UserService, storageService *service.StorageSettingsService, args []string, interactiveInput io.Reader) error {
+func executeAdminCommand(ctx context.Context, allowRegistrationFallback bool, userService *service.UserService, args []string) error {
 	switch args[0] {
 	case "user":
 		return runAdminUser(ctx, userService, args[1:])
@@ -101,15 +100,13 @@ func executeAdminCommand(ctx context.Context, allowRegistrationFallback bool, us
 		return runAdminToken(ctx, userService, args[1:])
 	case "registration":
 		return runAdminRegistration(ctx, userService, allowRegistrationFallback, args[1:])
-	case "storage":
-		return runAdminStorage(ctx, storageService, args[1:], interactiveInput)
 	default:
 		printUsage()
 		return fmt.Errorf("unknown admin command: %s", args[0])
 	}
 }
 
-func runRuntimeConsole(cfg config.Config, userService *service.UserService, storageService *service.StorageSettingsService) {
+func runRuntimeConsole(cfg config.Config, userService *service.UserService) {
 	fmt.Println("Runtime Console: 输入命令，示例：user create demo demo-pass")
 	fmt.Println("Runtime Console: 输入 help 查看命令，输入 exit 退出控制台（不会停止服务）")
 
@@ -156,7 +153,7 @@ func runRuntimeConsole(cfg config.Config, userService *service.UserService, stor
 			}
 		}
 
-		if err := executeAdminCommand(context.Background(), cfg.AllowRegistration, userService, storageService, parsed, reader); err != nil {
+		if err := executeAdminCommand(context.Background(), cfg.AllowRegistration, userService, parsed); err != nil {
 			fmt.Printf("command failed: %v\n", err)
 		}
 		if errors.Is(readErr, io.EOF) {
@@ -409,144 +406,6 @@ func runAdminRegistration(ctx context.Context, userService *service.UserService,
 	}
 }
 
-func runAdminStorage(ctx context.Context, storageService *service.StorageSettingsService, args []string, interactiveInput io.Reader) error {
-	if len(args) < 1 {
-		printUsage()
-		return fmt.Errorf("usage: admin storage <status|set-local|set-s3|wizard>")
-	}
-
-	switch args[0] {
-	case "status":
-		resolved, err := storageService.Resolve(ctx)
-		if err != nil {
-			return fmt.Errorf("read storage setting failed: %w", err)
-		}
-		fmt.Printf("storage_backend=%s\n", resolved.Backend)
-		if resolved.Backend == config.StorageBackendS3 {
-			fmt.Printf("storage_s3_endpoint=%s\n", resolved.S3.Endpoint)
-			fmt.Printf("storage_s3_region=%s\n", resolved.S3.Region)
-			fmt.Printf("storage_s3_bucket=%s\n", resolved.S3.Bucket)
-			fmt.Printf("storage_s3_access_key_id=%s\n", maskSecret(resolved.S3.AccessKeyID))
-			fmt.Printf("storage_s3_access_key_secret=%s\n", maskSecret(resolved.S3.AccessSecret))
-			fmt.Printf("storage_s3_use_path_style=%t\n", resolved.S3.UsePathStyle)
-		}
-		return nil
-	case "set-local":
-		if err := storageService.SetLocal(ctx); err != nil {
-			return fmt.Errorf("set storage backend local failed: %w", err)
-		}
-		fmt.Println("storage_backend=local")
-		fmt.Println("note: restart server to apply storage backend change")
-		return nil
-	case "set-s3":
-		return runAdminStorageSetS3(ctx, storageService, args[1:], interactiveInput)
-	case "wizard":
-		return runAdminStorageWizard(ctx, storageService, interactiveInput)
-	default:
-		printUsage()
-		return fmt.Errorf("unknown storage subcommand: %s", args[0])
-	}
-}
-
-func runAdminStorageSetS3(ctx context.Context, storageService *service.StorageSettingsService, args []string, interactiveInput io.Reader) error {
-	flagSet := flag.NewFlagSet("admin storage set-s3", flag.ContinueOnError)
-	flagSet.SetOutput(io.Discard)
-	endpoint := flagSet.String("endpoint", "", "S3 endpoint")
-	region := flagSet.String("region", "", "S3 region")
-	bucket := flagSet.String("bucket", "", "S3 bucket")
-	accessKeyID := flagSet.String("access-key-id", "", "S3 access key id")
-	accessKeySecret := flagSet.String("access-key-secret", "", "S3 access key secret")
-	usePathStyleRaw := flagSet.String("use-path-style", "", "S3 use path style (true/false), default true")
-	interactiveMode := flagSet.Bool("interactive", false, "interactive prompt for S3 settings")
-	if err := flagSet.Parse(args); err != nil {
-		return fmt.Errorf("parse storage args failed: %w", err)
-	}
-	if len(flagSet.Args()) > 0 {
-		return fmt.Errorf("unexpected positional args: %s", strings.Join(flagSet.Args(), " "))
-	}
-
-	usePathStyle := true
-	usePathStyleSet := false
-	if strings.TrimSpace(*usePathStyleRaw) != "" {
-		parsed, ok := parseBoolInput(*usePathStyleRaw)
-		if !ok {
-			return fmt.Errorf("invalid --use-path-style %q, expected true/false", *usePathStyleRaw)
-		}
-		usePathStyle = parsed
-		usePathStyleSet = true
-	}
-
-	seed := config.S3Config{
-		Endpoint:     strings.TrimSpace(*endpoint),
-		Region:       strings.TrimSpace(*region),
-		Bucket:       strings.TrimSpace(*bucket),
-		AccessKeyID:  strings.TrimSpace(*accessKeyID),
-		AccessSecret: strings.TrimSpace(*accessKeySecret),
-		UsePathStyle: usePathStyle,
-	}
-
-	if *interactiveMode {
-		return runAdminStorageSetS3Interactive(ctx, storageService, seed, usePathStyleSet, interactiveInput)
-	}
-
-	if err := storageService.SetS3(ctx, seed); err != nil {
-		return fmt.Errorf("set storage backend s3 failed: %w", err)
-	}
-
-	fmt.Println("storage_backend=s3")
-	fmt.Println("note: restart server to apply storage backend change")
-	return nil
-}
-
-func runAdminStorageWizard(ctx context.Context, storageService *service.StorageSettingsService, interactiveInput io.Reader) error {
-	return runAdminStorageSetS3Interactive(ctx, storageService, config.S3Config{}, false, interactiveInput)
-}
-
-func runAdminStorageSetS3Interactive(ctx context.Context, storageService *service.StorageSettingsService, seed config.S3Config, usePathStyleSeeded bool, interactiveInput io.Reader) error {
-	if interactiveInput == nil {
-		return fmt.Errorf("interactive input is not available")
-	}
-
-	defaults := config.S3Config{
-		Region:       "auto",
-		UsePathStyle: true,
-	}
-	if resolved, err := storageService.Resolve(ctx); err == nil && resolved.Backend == config.StorageBackendS3 {
-		defaults = resolved.S3
-	}
-
-	if seed.Endpoint != "" {
-		defaults.Endpoint = seed.Endpoint
-	}
-	if seed.Region != "" {
-		defaults.Region = seed.Region
-	}
-	if seed.Bucket != "" {
-		defaults.Bucket = seed.Bucket
-	}
-	if seed.AccessKeyID != "" {
-		defaults.AccessKeyID = seed.AccessKeyID
-	}
-	if seed.AccessSecret != "" {
-		defaults.AccessSecret = seed.AccessSecret
-	}
-	if usePathStyleSeeded {
-		defaults.UsePathStyle = seed.UsePathStyle
-	}
-
-	fmt.Println("S3 configuration wizard (values will be saved into database)")
-	cfg, err := collectInteractiveS3Config(interactiveInput, os.Stdout, defaults)
-	if err != nil {
-		return fmt.Errorf("interactive input failed: %w", err)
-	}
-	if err := storageService.SetS3(ctx, cfg); err != nil {
-		return fmt.Errorf("set storage backend s3 failed: %w", err)
-	}
-	fmt.Println("storage_backend=s3")
-	fmt.Println("note: restart server to apply storage backend change")
-	return nil
-}
-
 func printUsage() {
 	fmt.Println("Usage:")
 	fmt.Println("  go run ./cmd/server")
@@ -561,7 +420,6 @@ func printRuntimeConsoleUsage() {
 	fmt.Println("  token list <username_or_id> [--all]")
 	fmt.Println("  token revoke <token_id>")
 	fmt.Println("  registration status|enable|disable")
-	fmt.Println("  storage status|set-local|set-s3 ...|wizard")
 	fmt.Println("  help")
 	fmt.Println("  exit")
 }
@@ -571,150 +429,6 @@ func formatOptionalTime(t *time.Time) string {
 		return "-"
 	}
 	return t.UTC().Format(time.RFC3339)
-}
-
-func maskSecret(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return "-"
-	}
-	if len(raw) <= 4 {
-		return "****"
-	}
-	return raw[:2] + "****" + raw[len(raw)-2:]
-}
-
-func collectInteractiveS3Config(input io.Reader, output io.Writer, defaults config.S3Config) (config.S3Config, error) {
-	if input == nil {
-		return config.S3Config{}, fmt.Errorf("interactive input is required")
-	}
-	if output == nil {
-		output = io.Discard
-	}
-	reader := bufio.NewReader(input)
-
-	endpoint, err := promptRequiredString(reader, output, "S3 endpoint", defaults.Endpoint)
-	if err != nil {
-		return config.S3Config{}, err
-	}
-	region, err := promptRequiredString(reader, output, "S3 region", defaults.Region)
-	if err != nil {
-		return config.S3Config{}, err
-	}
-	bucket, err := promptRequiredString(reader, output, "S3 bucket", defaults.Bucket)
-	if err != nil {
-		return config.S3Config{}, err
-	}
-	accessKeyID, err := promptRequiredString(reader, output, "S3 access key id", defaults.AccessKeyID)
-	if err != nil {
-		return config.S3Config{}, err
-	}
-	accessSecret, err := promptSecretString(reader, output, defaults.AccessSecret)
-	if err != nil {
-		return config.S3Config{}, err
-	}
-	usePathStyle, err := promptBoolString(reader, output, "S3 use path style", defaults.UsePathStyle)
-	if err != nil {
-		return config.S3Config{}, err
-	}
-
-	return config.S3Config{
-		Endpoint:     endpoint,
-		Region:       region,
-		Bucket:       bucket,
-		AccessKeyID:  accessKeyID,
-		AccessSecret: accessSecret,
-		UsePathStyle: usePathStyle,
-	}, nil
-}
-
-func promptRequiredString(reader *bufio.Reader, output io.Writer, label string, defaultValue string) (string, error) {
-	for {
-		if strings.TrimSpace(defaultValue) == "" {
-			fmt.Fprintf(output, "%s: ", label)
-		} else {
-			fmt.Fprintf(output, "%s [%s]: ", label, defaultValue)
-		}
-
-		raw, err := reader.ReadString('\n')
-		if err != nil && !errors.Is(err, io.EOF) {
-			return "", err
-		}
-		value := strings.TrimSpace(raw)
-		if value == "" {
-			value = strings.TrimSpace(defaultValue)
-		}
-		if value != "" {
-			return value, nil
-		}
-
-		fmt.Fprintln(output, "value cannot be empty")
-		if errors.Is(err, io.EOF) {
-			return "", fmt.Errorf("%s cannot be empty", label)
-		}
-	}
-}
-
-func promptSecretString(reader *bufio.Reader, output io.Writer, currentValue string) (string, error) {
-	hasCurrent := strings.TrimSpace(currentValue) != ""
-	for {
-		if hasCurrent {
-			fmt.Fprint(output, "S3 access key secret [leave empty to keep current]: ")
-		} else {
-			fmt.Fprint(output, "S3 access key secret: ")
-		}
-
-		raw, err := reader.ReadString('\n')
-		if err != nil && !errors.Is(err, io.EOF) {
-			return "", err
-		}
-		value := strings.TrimSpace(raw)
-		if value != "" {
-			return value, nil
-		}
-		if hasCurrent {
-			return strings.TrimSpace(currentValue), nil
-		}
-
-		fmt.Fprintln(output, "value cannot be empty")
-		if errors.Is(err, io.EOF) {
-			return "", fmt.Errorf("S3 access key secret cannot be empty")
-		}
-	}
-}
-
-func promptBoolString(reader *bufio.Reader, output io.Writer, label string, defaultValue bool) (bool, error) {
-	for {
-		fmt.Fprintf(output, "%s [true/false] (%t): ", label, defaultValue)
-		raw, err := reader.ReadString('\n')
-		if err != nil && !errors.Is(err, io.EOF) {
-			return false, err
-		}
-		value := strings.TrimSpace(raw)
-		if value == "" {
-			return defaultValue, nil
-		}
-		parsed, ok := parseBoolInput(value)
-		if ok {
-			return parsed, nil
-		}
-
-		fmt.Fprintln(output, "invalid value, expected true/false")
-		if errors.Is(err, io.EOF) {
-			return false, fmt.Errorf("%s expects true or false", label)
-		}
-	}
-}
-
-func parseBoolInput(raw string) (bool, bool) {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "1", "t", "true", "y", "yes", "on":
-		return true, true
-	case "0", "f", "false", "n", "no", "off":
-		return false, true
-	default:
-		return false, false
-	}
 }
 
 func parseTTL(raw string) (time.Duration, error) {

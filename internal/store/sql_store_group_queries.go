@@ -329,7 +329,9 @@ func (s *SQLStore) CreateGroupMessage(
 	groupID int64,
 	creatorID int64,
 	content string,
+	payloadEnvelope string,
 	tags []string,
+	attachments []AttachmentBinding,
 ) (models.GroupMessage, error) {
 	now := time.Now().UTC()
 	normalizedTags := normalizeGroupTags(tags)
@@ -346,11 +348,12 @@ func (s *SQLStore) CreateGroupMessage(
 
 	res, err := tx.ExecContext(
 		ctx,
-		`INSERT INTO group_messages (group_id, creator_id, content, create_time, update_time)
-		VALUES (?, ?, ?, ?, ?)`,
+		`INSERT INTO group_messages (group_id, creator_id, content, payload_envelope, create_time, update_time)
+		VALUES (?, ?, ?, ?, ?, ?)`,
 		groupID,
 		creatorID,
 		content,
+		payloadEnvelope,
 		now.Format(time.RFC3339Nano),
 		now.Format(time.RFC3339Nano),
 	)
@@ -375,6 +378,18 @@ func (s *SQLStore) CreateGroupMessage(
 			return models.GroupMessage{}, err
 		}
 	}
+	for index, attachment := range attachments {
+		if _, err := tx.ExecContext(
+			ctx,
+			`INSERT INTO group_message_attachments (message_id, attachment_id, association_encryption_metadata, position) VALUES (?, ?, ?, ?)`,
+			messageID,
+			attachment.AttachmentID,
+			strings.TrimSpace(attachment.AssociationEncryptionMetadata),
+			index,
+		); err != nil {
+			return models.GroupMessage{}, err
+		}
+	}
 
 	if err := tx.Commit(); err != nil {
 		return models.GroupMessage{}, err
@@ -388,7 +403,9 @@ func (s *SQLStore) UpdateGroupMessage(
 	messageID int64,
 	actorID int64,
 	content string,
+	payloadEnvelope string,
 	tags []string,
+	attachments []AttachmentBinding,
 ) (models.GroupMessage, error) {
 	now := time.Now().UTC()
 	normalizedTags := normalizeGroupTags(tags)
@@ -416,9 +433,10 @@ func (s *SQLStore) UpdateGroupMessage(
 		return models.GroupMessage{}, err
 	}
 
-	query := `UPDATE group_messages SET content = ?, update_time = ?`
+	query := `UPDATE group_messages SET content = ?, payload_envelope = ?, update_time = ?`
 	args := []any{
 		normalizedContent,
+		payloadEnvelope,
 		now.Format(time.RFC3339Nano),
 	}
 	query += ` WHERE id = ? AND group_id = ?`
@@ -447,6 +465,21 @@ func (s *SQLStore) UpdateGroupMessage(
 			groupID,
 			tag,
 			now.Format(time.RFC3339Nano),
+		); err != nil {
+			return models.GroupMessage{}, err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM group_message_attachments WHERE message_id = ?`, messageID); err != nil {
+		return models.GroupMessage{}, err
+	}
+	for index, attachment := range attachments {
+		if _, err := tx.ExecContext(
+			ctx,
+			`INSERT INTO group_message_attachments (message_id, attachment_id, association_encryption_metadata, position) VALUES (?, ?, ?, ?)`,
+			messageID,
+			attachment.AttachmentID,
+			strings.TrimSpace(attachment.AssociationEncryptionMetadata),
+			index,
 		); err != nil {
 			return models.GroupMessage{}, err
 		}
@@ -484,7 +517,7 @@ func (s *SQLStore) GetGroupMessageByID(ctx context.Context, messageID int64) (mo
 	var updateTime string
 	err := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, group_id, creator_id, content, create_time, update_time
+		`SELECT id, group_id, creator_id, content, payload_envelope, create_time, update_time
 		FROM group_messages
 		WHERE id = ?`,
 		messageID,
@@ -493,6 +526,7 @@ func (s *SQLStore) GetGroupMessageByID(ctx context.Context, messageID int64) (mo
 		&msg.GroupID,
 		&msg.CreatorID,
 		&msg.Content,
+		&msg.PayloadEnvelope,
 		&createTime,
 		&updateTime,
 	)
@@ -532,7 +566,7 @@ func (s *SQLStore) ListGroupMessagesPage(
 
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT id, group_id, creator_id, content, create_time, update_time
+		`SELECT id, group_id, creator_id, content, payload_envelope, create_time, update_time
 		FROM group_messages
 		WHERE group_id = ?
 		ORDER BY create_time ASC, id ASC
@@ -556,6 +590,7 @@ func (s *SQLStore) ListGroupMessagesPage(
 			&msg.GroupID,
 			&msg.CreatorID,
 			&msg.Content,
+			&msg.PayloadEnvelope,
 			&createTime,
 			&updateTime,
 		); err != nil {

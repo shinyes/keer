@@ -52,6 +52,22 @@ type User struct {
 	UpdateTime        time.Time
 }
 
+type UserEncryptionKey struct {
+	UserID                   int64
+	Version                  int
+	KDFAlgorithm             string
+	KDFSalt                  string
+	KDFIterations            int
+	WrapAlgorithm            string
+	WrappedAccountKey        string
+	SharingPublicKey         string
+	WrappedSharingPrivateKey string
+	KeyVersion               int
+	Algorithms               string
+	CreateTime               time.Time
+	UpdateTime               time.Time
+}
+
 type PersonalAccessToken struct {
 	ID          int64
 	UserID      int64
@@ -64,18 +80,30 @@ type PersonalAccessToken struct {
 	RevokedAt   *time.Time
 }
 
+type RefreshToken struct {
+	ID          int64
+	UserID      int64
+	TokenPrefix string
+	TokenHash   string
+	CreatedAt   time.Time
+	LastUsedAt  *time.Time
+	ExpiresAt   time.Time
+	RevokedAt   *time.Time
+}
+
 type Memo struct {
-	ID         int64
-	CreatorID  int64
-	Content    string
-	Visibility Visibility
-	State      MemoState
-	Pinned     bool
-	CreateTime time.Time
-	UpdateTime time.Time
-	Latitude   *float64
-	Longitude  *float64
-	Payload    MemoPayload
+	ID              int64
+	CreatorID       int64
+	Content         string
+	PayloadEnvelope string
+	Visibility      Visibility
+	State           MemoState
+	Pinned          bool
+	CreateTime      time.Time
+	UpdateTime      time.Time
+	Latitude        *float64
+	Longitude       *float64
+	Payload         MemoPayload
 }
 
 type Group struct {
@@ -102,46 +130,69 @@ type GroupTag struct {
 }
 
 type GroupMessage struct {
-	ID         int64
+	ID              int64
+	GroupID         int64
+	CreatorID       int64
+	Content         string
+	PayloadEnvelope string
+	CreateTime      time.Time
+	UpdateTime      time.Time
+	Tags            []string
+}
+
+type GroupKeyVersion struct {
 	GroupID    int64
-	CreatorID  int64
-	Content    string
+	Version    int
+	Algorithm  string
 	CreateTime time.Time
 	UpdateTime time.Time
-	Tags       []string
+}
+
+type GroupKeyVersionRecipient struct {
+	GroupID       int64
+	Version       int
+	UserID        int64
+	SlotRef       string
+	WrapAlgorithm string
+	WrappedKey    string
+	CreateTime    time.Time
+	UpdateTime    time.Time
 }
 
 type Attachment struct {
-	ID                   int64
-	CreatorID            int64
-	Filename             string
-	ExternalLink         string
-	Type                 string
-	Size                 int64
-	StorageType          string
-	StorageKey           string
-	ThumbnailFilename    string
-	ThumbnailType        string
-	ThumbnailSize        int64
-	ThumbnailStorageType string
-	ThumbnailStorageKey  string
-	CreateTime           time.Time
+	ID                            int64
+	CreatorID                     int64
+	Filename                      string
+	ExternalLink                  string
+	Type                          string
+	Size                          int64
+	EncryptionMetadata            string
+	AssociationEncryptionMetadata string
+	StorageType                   string
+	StorageKey                    string
+	ThumbnailFilename             string
+	ThumbnailType                 string
+	ThumbnailSize                 int64
+	ThumbnailStorageType          string
+	ThumbnailStorageKey           string
+	CreateTime                    time.Time
 }
 
 type AttachmentUploadSession struct {
-	ID                string
-	CreatorID         int64
-	Filename          string
-	Type              string
-	Size              int64
-	MemoName          *string
-	TempPath          string
-	ThumbnailFilename string
-	ThumbnailType     string
-	ThumbnailTempPath string
-	ReceivedSize      int64
-	CreateTime        time.Time
-	UpdateTime        time.Time
+	ID                 string
+	CreatorID          int64
+	Filename           string
+	Type               string
+	Size               int64
+	EncryptionMetadata string
+	MemoName           *string
+	TempPath           string
+	ThumbnailFilename  string
+	ThumbnailType      string
+	ThumbnailTempPath  string
+	ReceivedSize       int64
+	CreateTime         time.Time
+	UpdateTime         time.Time
 }
 
 func (m Memo) Name() string {

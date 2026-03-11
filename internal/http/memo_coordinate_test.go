@@ -100,7 +100,15 @@ func createMemoWithCoordinates(t *testing.T, app *fiber.App, token string, latit
 	t.Helper()
 
 	createPayload := map[string]any{
-		"content":     "memo with coordinates",
+		"encryptedPayload": "memo-with-coordinates-ciphertext",
+		"payloadEnvelope": map[string]any{"wrappedKeys": []any{
+			map[string]any{
+				"slotType":      "account_master",
+				"slotRef":       "users/1",
+				"wrapAlgorithm": "AES_GCM_ACCOUNT_MASTER_KEY_V1",
+				"wrappedKey":    "memo-coordinate-wrapped-key",
+			},
+		}},
 		"visibility":  "PRIVATE",
 		"attachments": []any{},
 		"latitude":    latitude,

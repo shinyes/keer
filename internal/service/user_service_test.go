@@ -153,20 +153,23 @@ func TestSignInWithPassword_Success(t *testing.T) {
 		t.Fatalf("CreateUser() error = %v", err)
 	}
 
-	user, token, err := userService.SignInWithPassword(ctx, "signin01", "pass-123")
+	user, tokens, err := userService.SignInWithPassword(ctx, "signin01", "pass-123")
 	if err != nil {
 		t.Fatalf("SignInWithPassword() error = %v", err)
 	}
-	if token == "" {
-		t.Fatalf("expected non-empty token")
+	if tokens.AccessToken == "" {
+		t.Fatalf("expected non-empty access token")
+	}
+	if tokens.RefreshToken == "" {
+		t.Fatalf("expected non-empty refresh token")
 	}
 	if user.ID != created.ID {
 		t.Fatalf("expected signed-in user ID=%d, got %d", created.ID, user.ID)
 	}
 
-	authUser, err := userService.AuthenticateToken(ctx, token)
+	authUser, err := userService.AuthenticateAccessToken(ctx, tokens.AccessToken)
 	if err != nil {
-		t.Fatalf("AuthenticateToken() error = %v", err)
+		t.Fatalf("AuthenticateAccessToken() error = %v", err)
 	}
 	if authUser.ID != created.ID {
 		t.Fatalf("expected authenticated user ID=%d, got %d", created.ID, authUser.ID)
@@ -190,6 +193,46 @@ func TestSignInWithPassword_InvalidCredentials(t *testing.T) {
 	}
 	if _, _, err := userService.SignInWithPassword(ctx, "not-exists", "pass-123"); !errors.Is(err, ErrInvalidCredentials) {
 		t.Fatalf("expected ErrInvalidCredentials for not exists user, got %v", err)
+	}
+}
+
+func TestRefreshSession_RotatesRefreshToken(t *testing.T) {
+	services := setupTestServices(t)
+	userService := NewUserService(services.store)
+	ctx := context.Background()
+
+	created, err := userService.CreateUser(ctx, nil, CreateUserInput{
+		Username: "refresh01",
+		Password: "pass-123",
+	}, true)
+	if err != nil {
+		t.Fatalf("CreateUser() error = %v", err)
+	}
+
+	_, tokens, err := userService.SignInWithPassword(ctx, "refresh01", "pass-123")
+	if err != nil {
+		t.Fatalf("SignInWithPassword() error = %v", err)
+	}
+
+	refreshedUser, refreshedTokens, err := userService.RefreshSession(ctx, tokens.RefreshToken)
+	if err != nil {
+		t.Fatalf("RefreshSession() error = %v", err)
+	}
+	if refreshedUser.ID != created.ID {
+		t.Fatalf("expected refreshed user ID=%d, got %d", created.ID, refreshedUser.ID)
+	}
+	if refreshedTokens.AccessToken == "" || refreshedTokens.RefreshToken == "" {
+		t.Fatalf("expected rotated access/refresh tokens")
+	}
+	if refreshedTokens.RefreshToken == tokens.RefreshToken {
+		t.Fatalf("expected refresh token rotation")
+	}
+
+	if _, err := userService.AuthenticateAccessToken(ctx, refreshedTokens.AccessToken); err != nil {
+		t.Fatalf("AuthenticateAccessToken(refreshed) error = %v", err)
+	}
+	if _, _, err := userService.RefreshSession(ctx, tokens.RefreshToken); !errors.Is(err, ErrInvalidRefreshToken) {
+		t.Fatalf("expected ErrInvalidRefreshToken for rotated refresh token, got %v", err)
 	}
 }
 

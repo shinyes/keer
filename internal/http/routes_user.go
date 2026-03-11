@@ -47,6 +47,78 @@ func registerUserRoutes(
 		})
 	})
 
+	api.Get("/users/:name/settings/ENCRYPTION", func(c *fiber.Ctx) error {
+		currentUser := CurrentUser(c)
+		name := strings.TrimSpace(c.Params("name"))
+		if name == "" {
+			return badRequest(c, "invalid user name")
+		}
+		user, err := userService.GetUserByIdentifier(c.Context(), name)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return notFound(c, "user not found")
+			}
+			return internalError(c, err)
+		}
+		if user.ID != currentUser.ID {
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"message": "forbidden"})
+		}
+
+		encryptionKey, err := userService.GetUserEncryptionKey(c.Context(), user.ID)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return notFound(c, "encryption setting not found")
+			}
+			return internalError(c, err)
+		}
+		return c.JSON(userEncryptionSettingResponse{
+			EncryptionSetting: toAPIUserEncryptionSetting(encryptionKey),
+		})
+	})
+
+	api.Put("/users/:name/settings/ENCRYPTION", func(c *fiber.Ctx) error {
+		currentUser := CurrentUser(c)
+		name := strings.TrimSpace(c.Params("name"))
+		if name == "" {
+			return badRequest(c, "invalid user name")
+		}
+		user, err := userService.GetUserByIdentifier(c.Context(), name)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return notFound(c, "user not found")
+			}
+			return internalError(c, err)
+		}
+		if user.ID != currentUser.ID {
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"message": "forbidden"})
+		}
+
+		var req updateUserEncryptionSettingRequest
+		if err := c.BodyParser(&req); err != nil {
+			return badRequest(c, "invalid request body")
+		}
+
+		encryptionKey, err := userService.UpsertUserEncryptionKey(c.Context(), user.ID, service.UpsertUserEncryptionKeyInput{
+			Version:                  req.EncryptionSetting.RecoveryBundle.Version,
+			KDFAlgorithm:             req.EncryptionSetting.RecoveryBundle.KDFAlgorithm,
+			KDFSalt:                  req.EncryptionSetting.RecoveryBundle.KDFSalt,
+			KDFIterations:            req.EncryptionSetting.RecoveryBundle.KDFIterations,
+			WrapAlgorithm:            req.EncryptionSetting.RecoveryBundle.WrapAlgorithm,
+			WrappedAccountKey:        req.EncryptionSetting.RecoveryBundle.WrappedAccountKey,
+			SharingPublicKey:         req.EncryptionSetting.SharingPublicKey,
+			WrappedSharingPrivateKey: req.EncryptionSetting.WrappedSharingPrivateKey,
+			KeyVersion:               req.EncryptionSetting.KeyVersion,
+			Algorithms:               req.EncryptionSetting.Algorithms,
+		})
+		if err != nil {
+			return badRequest(c, err.Error())
+		}
+
+		return c.JSON(userEncryptionSettingResponse{
+			EncryptionSetting: toAPIUserEncryptionSetting(encryptionKey),
+		})
+	})
+
 	api.Get("/users/:name\\:getStats", func(c *fiber.Ctx) error {
 		name := strings.TrimSpace(c.Params("name"))
 		if name == "" {
@@ -96,6 +168,54 @@ func registerUserRoutes(
 			}
 			seenUserIDs[user.ID] = struct{}{}
 			resp.Users = append(resp.Users, toAPIUserSync(user))
+		}
+
+		return c.JSON(resp)
+	})
+
+	api.Get("/users/keys/batch", func(c *fiber.Ctx) error {
+		identifiers := parseBatchIdentifiers(c.Query("ids"))
+		if len(identifiers) > 200 {
+			return badRequest(c, "too many user ids")
+		}
+
+		resp := listUserPublicKeysResponse{
+			Users: make([]apiUserPublicKey, 0, len(identifiers)),
+		}
+		if len(identifiers) == 0 {
+			return c.JSON(resp)
+		}
+
+		seenUserIDs := make(map[int64]struct{}, len(identifiers))
+		for _, identifier := range identifiers {
+			user, err := userService.GetUserByIdentifier(c.Context(), identifier)
+			if err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					continue
+				}
+				return internalError(c, err)
+			}
+			if _, exists := seenUserIDs[user.ID]; exists {
+				continue
+			}
+			seenUserIDs[user.ID] = struct{}{}
+
+			encryptionKey, err := userService.GetUserEncryptionKey(c.Context(), user.ID)
+			if err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					continue
+				}
+				return internalError(c, err)
+			}
+			if strings.TrimSpace(encryptionKey.SharingPublicKey) == "" {
+				continue
+			}
+
+			resp.Users = append(resp.Users, apiUserPublicKey{
+				Name:             user.Name(),
+				SharingPublicKey: encryptionKey.SharingPublicKey,
+				KeyVersion:       encryptionKey.KeyVersion,
+			})
 		}
 
 		return c.JSON(resp)

@@ -1,7 +1,9 @@
 .git
 .github
-tmp
 data
+dist
+tmp
 *.db
 *.log
 **/*_test.go
+coverage.out

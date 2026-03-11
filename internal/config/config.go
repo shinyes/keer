@@ -5,6 +5,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type StorageBackend string
@@ -35,22 +36,50 @@ type Config struct {
 	AllowRegistration bool
 	BootstrapUser     string
 	BootstrapToken    string
+	JWTSecret         string
+	AccessTokenTTL    time.Duration
+	RefreshTokenTTL   time.Duration
 }
 
 func Load() (Config, error) {
 	cfg := Config{
-		Addr:              env("APP_ADDR", ":12843"),
-		BaseURL:           strings.TrimRight(env("BASE_URL", "http://localhost:12843"), "/"),
-		DBPath:            env("DB_PATH", "./data/keer.db"),
-		UploadsDir:        env("UPLOADS_DIR", "./data/uploads"),
-		BodyLimitMB:       envInt("HTTP_BODY_LIMIT_MB", 64),
-		KeerAPIVersion:    env("KEER_API_VERSION", "0.1"),
-		Storage:           StorageBackendLocal,
+		Addr:           env("APP_ADDR", ":12843"),
+		BaseURL:        strings.TrimRight(env("BASE_URL", "http://localhost:12843"), "/"),
+		DBPath:         env("DB_PATH", "./data/keer.db"),
+		UploadsDir:     env("UPLOADS_DIR", "./data/uploads"),
+		BodyLimitMB:    envInt("HTTP_BODY_LIMIT_MB", 64),
+		KeerAPIVersion: env("KEER_API_VERSION", "0.1"),
+		Storage:        envStorageBackend("STORAGE_BACKEND", StorageBackendLocal),
+		S3: S3Config{
+			Endpoint:     env("S3_ENDPOINT", ""),
+			Region:       env("S3_REGION", ""),
+			Bucket:       env("S3_BUCKET", ""),
+			AccessKeyID:  env("S3_ACCESS_KEY_ID", ""),
+			AccessSecret: env("S3_ACCESS_KEY_SECRET", ""),
+			UsePathStyle: envBool("S3_USE_PATH_STYLE", true),
+		},
 		AllowRegistration: envBool("ALLOW_REGISTRATION", true),
 		BootstrapUser:     env("BOOTSTRAP_USER", "demo"),
 		BootstrapToken:    env("BOOTSTRAP_TOKEN", ""),
+		JWTSecret:         env("JWT_SECRET", "change-me-in-production"),
+		AccessTokenTTL:    envDuration("ACCESS_TOKEN_TTL", 15*time.Minute),
+		RefreshTokenTTL:   envDuration("REFRESH_TOKEN_TTL", 30*24*time.Hour),
+	}
+	if err := cfg.Validate(); err != nil {
+		return Config{}, err
 	}
 	return cfg, nil
+}
+
+func (c Config) Validate() error {
+	switch c.Storage {
+	case StorageBackendLocal:
+		return nil
+	case StorageBackendS3:
+		return c.S3.Validate()
+	default:
+		return fmt.Errorf("unsupported storage backend %q", c.Storage)
+	}
 }
 
 func (c S3Config) Validate() error {
@@ -102,4 +131,24 @@ func envInt(key string, fallback int) int {
 		return fallback
 	}
 	return parsed
+}
+
+func envDuration(key string, fallback time.Duration) time.Duration {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback
+	}
+	parsed, err := time.ParseDuration(v)
+	if err != nil || parsed <= 0 {
+		return fallback
+	}
+	return parsed
+}
+
+func envStorageBackend(key string, fallback StorageBackend) StorageBackend {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	if v == "" {
+		return fallback
+	}
+	return StorageBackend(v)
 }

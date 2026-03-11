@@ -18,7 +18,6 @@ type Container struct {
 	Config            config.Config
 	Store             *store.SQLStore
 	UserService       *service.UserService
-	StorageService    *service.StorageSettingsService
 	MemoService       *service.MemoService
 	GroupService      *service.GroupService
 	AttachmentService *service.AttachmentService
@@ -40,15 +39,12 @@ func Build(ctx context.Context, cfg config.Config) (*Container, func() error, er
 	}
 
 	sqlStore := store.New(sqliteDB)
-	userService := service.NewUserService(sqlStore)
-	storageService := service.NewStorageSettingsService(sqlStore)
-	resolvedStorage, err := storageService.Resolve(ctx)
-	if err != nil {
+	if err := purgeLegacyStorageSettings(ctx, sqlStore); err != nil {
 		_ = cleanup()
-		return nil, nil, fmt.Errorf("resolve storage settings: %w", err)
+		return nil, nil, fmt.Errorf("purge legacy storage settings: %w", err)
 	}
-	cfg.Storage = resolvedStorage.Backend
-	cfg.S3 = resolvedStorage.S3
+	userService := service.NewUserService(sqlStore)
+	userService.ConfigureAuth(cfg.JWTSecret, cfg.AccessTokenTTL, cfg.RefreshTokenTTL)
 	if err := userService.EnsureBootstrap(ctx, cfg.BootstrapUser, cfg.BootstrapToken); err != nil {
 		_ = cleanup()
 		return nil, nil, fmt.Errorf("bootstrap setup: %w", err)
@@ -87,10 +83,26 @@ func Build(ctx context.Context, cfg config.Config) (*Container, func() error, er
 		Config:            cfg,
 		Store:             sqlStore,
 		UserService:       userService,
-		StorageService:    storageService,
 		MemoService:       memoService,
 		GroupService:      groupService,
 		AttachmentService: attachmentService,
 		Router:            router,
 	}, cleanup, nil
+}
+
+func purgeLegacyStorageSettings(ctx context.Context, sqlStore *store.SQLStore) error {
+	for _, key := range []string{
+		"storage_backend",
+		"storage_s3_endpoint",
+		"storage_s3_region",
+		"storage_s3_bucket",
+		"storage_s3_access_key_id",
+		"storage_s3_access_key_secret",
+		"storage_s3_use_path_style",
+	} {
+		if err := sqlStore.DeleteSetting(ctx, key); err != nil {
+			return err
+		}
+	}
+	return nil
 }

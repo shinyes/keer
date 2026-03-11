@@ -2,6 +2,7 @@ package http
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -54,6 +55,25 @@ func toAPIUserSync(user models.User) apiUser {
 	}
 }
 
+func toAPIUserEncryptionSetting(encryptionKey models.UserEncryptionKey) apiUserEncryptionSetting {
+	return apiUserEncryptionSetting{
+		RecoveryBundle: apiRecoveryBundle{
+			Version:           encryptionKey.Version,
+			KDFAlgorithm:      encryptionKey.KDFAlgorithm,
+			KDFSalt:           encryptionKey.KDFSalt,
+			KDFIterations:     encryptionKey.KDFIterations,
+			WrapAlgorithm:     encryptionKey.WrapAlgorithm,
+			WrappedAccountKey: encryptionKey.WrappedAccountKey,
+		},
+		SharingPublicKey:         encryptionKey.SharingPublicKey,
+		WrappedSharingPrivateKey: encryptionKey.WrappedSharingPrivateKey,
+		KeyVersion:               encryptionKey.KeyVersion,
+		Algorithms:               encryptionKey.Algorithms,
+		CreateTime:               formatMaybeTime(encryptionKey.CreateTime),
+		UpdateTime:               formatMaybeTime(encryptionKey.UpdateTime),
+	}
+}
+
 func toAPIGroup(group service.GroupWithMembers) apiGroup {
 	members := make([]apiGroupMember, 0, len(group.Members))
 	for _, member := range group.Members {
@@ -79,14 +99,20 @@ func toAPIGroupMessage(msg service.GroupMessageWithCreator) apiGroupMessage {
 	if tags == nil {
 		tags = []string{}
 	}
+	attachments := make([]apiAttachment, 0, len(msg.Attachments))
+	for _, attachment := range msg.Attachments {
+		attachments = append(attachments, toAPIAttachment(attachment, "", "", "", true))
+	}
 	return apiGroupMessage{
-		Name:       msg.Message.Name(),
-		Group:      "groups/" + models.Int64ToString(msg.Message.GroupID),
-		Creator:    msg.Creator.Name(),
-		CreateTime: formatMaybeTime(msg.Message.CreateTime),
-		UpdateTime: formatMaybeTime(msg.Message.UpdateTime),
-		Content:    msg.Message.Content,
-		Tags:       tags,
+		Name:             msg.Message.Name(),
+		Group:            "groups/" + models.Int64ToString(msg.Message.GroupID),
+		Creator:          msg.Creator.Name(),
+		CreateTime:       formatMaybeTime(msg.Message.CreateTime),
+		UpdateTime:       formatMaybeTime(msg.Message.UpdateTime),
+		EncryptedPayload: msg.Message.Content,
+		PayloadEnvelope:  parsePayloadEnvelope(msg.Message.PayloadEnvelope),
+		Tags:             tags,
+		Attachments:      attachments,
 	}
 }
 
@@ -100,72 +126,36 @@ func toAPIMemo(
 			attachments = append(attachments, attachmentMapper(attachment, memo.Memo.Name()))
 			continue
 		}
-		attachments = append(attachments, toAPIAttachment(attachment, memo.Memo.Name(), "", ""))
+		attachments = append(attachments, toAPIAttachment(attachment, memo.Memo.Name(), "", "", true))
 	}
 	tags := memo.Memo.Payload.Tags
 	if tags == nil {
 		tags = []string{}
 	}
-	quote := toAPIMemoQuote(memo.Quote, attachmentMapper)
 	return apiMemo{
-		Name:        memo.Memo.Name(),
-		State:       string(memo.Memo.State),
-		Creator:     "users/" + models.Int64ToString(memo.Memo.CreatorID),
-		CreateTime:  formatTime(memo.Memo.CreateTime),
-		UpdateTime:  formatTime(memo.Memo.UpdateTime),
-		Content:     memo.Memo.Content,
-		Visibility:  string(memo.Memo.Visibility),
-		Pinned:      memo.Memo.Pinned,
-		Latitude:    memo.Memo.Latitude,
-		Longitude:   memo.Memo.Longitude,
-		Attachments: attachments,
-		Tags:        tags,
-		Quote:       quote,
+		Name:             memo.Memo.Name(),
+		State:            string(memo.Memo.State),
+		Creator:          "users/" + models.Int64ToString(memo.Memo.CreatorID),
+		CreateTime:       formatTime(memo.Memo.CreateTime),
+		UpdateTime:       formatTime(memo.Memo.UpdateTime),
+		EncryptedPayload: memo.Memo.Content,
+		PayloadEnvelope:  parsePayloadEnvelope(memo.Memo.PayloadEnvelope),
+		Visibility:       string(memo.Memo.Visibility),
+		Pinned:           memo.Memo.Pinned,
+		Latitude:         memo.Memo.Latitude,
+		Longitude:        memo.Memo.Longitude,
+		Attachments:      attachments,
+		Tags:             tags,
 	}
 }
 
-func toAPIMemoQuote(
-	quote *service.MemoQuote,
-	attachmentMapper func(attachment models.Attachment, memoName string) apiAttachment,
-) *apiMemoQuote {
-	if quote == nil {
-		return nil
-	}
-	out := &apiMemoQuote{
-		SourceKind: string(quote.SourceKind),
-		Source:     quote.Source,
-	}
-	if quote.Memo == nil {
-		return out
-	}
-
-	referenced := quote.Memo
-	referencedAttachments := make([]apiAttachment, 0, len(referenced.Attachments))
-	for _, attachment := range referenced.Attachments {
-		if attachmentMapper != nil {
-			referencedAttachments = append(referencedAttachments, attachmentMapper(attachment, referenced.Memo.Name()))
-			continue
-		}
-		referencedAttachments = append(referencedAttachments, toAPIAttachment(attachment, referenced.Memo.Name(), "", ""))
-	}
-	tags := referenced.Memo.Payload.Tags
-	if tags == nil {
-		tags = []string{}
-	}
-	out.Memo = &apiMemoQuoteMemo{
-		Name:        referenced.Memo.Name(),
-		Creator:     "users/" + models.Int64ToString(referenced.Memo.CreatorID),
-		CreateTime:  formatMaybeTime(referenced.Memo.CreateTime),
-		UpdateTime:  formatMaybeTime(referenced.Memo.UpdateTime),
-		Content:     referenced.Memo.Content,
-		Visibility:  string(referenced.Memo.Visibility),
-		Attachments: referencedAttachments,
-		Tags:        tags,
-	}
-	return out
-}
-
-func toAPIAttachment(attachment models.Attachment, memoName string, directLink string, directThumbnailLink string) apiAttachment {
+func toAPIAttachment(
+	attachment models.Attachment,
+	memoName string,
+	directLink string,
+	directThumbnailLink string,
+	preferAssociationMetadata bool,
+) apiAttachment {
 	thumbnailName := ""
 	if strings.TrimSpace(attachment.ThumbnailStorageKey) != "" {
 		thumbnailName = "attachments/" + models.Int64ToString(attachment.ID) + "/thumbnail"
@@ -175,18 +165,118 @@ func toAPIAttachment(attachment models.Attachment, memoName string, directLink s
 		externalLink = strings.TrimSpace(attachment.ExternalLink)
 	}
 	thumbnailExternalLink := strings.TrimSpace(directThumbnailLink)
+	effectiveEncryptionMetadata := strings.TrimSpace(attachment.EncryptionMetadata)
+	if preferAssociationMetadata {
+		effectiveEncryptionMetadata = strings.TrimSpace(attachment.AssociationEncryptionMetadata)
+	}
+	descriptor := parseAttachmentEncryptionMetadata(effectiveEncryptionMetadata)
 	return apiAttachment{
-		Name:                  "attachments/" + models.Int64ToString(attachment.ID),
-		CreateTime:            formatTime(attachment.CreateTime),
-		Filename:              attachment.Filename,
-		ExternalLink:          externalLink,
-		Type:                  attachment.Type,
-		Size:                  models.Int64ToString(attachment.Size),
-		ThumbnailName:         thumbnailName,
-		ThumbnailExternalLink: thumbnailExternalLink,
-		ThumbnailFilename:     attachment.ThumbnailFilename,
-		ThumbnailType:         attachment.ThumbnailType,
-		Memo:                  memoName,
+		Name:                    "attachments/" + models.Int64ToString(attachment.ID),
+		CreateTime:              formatTime(attachment.CreateTime),
+		DescriptorCiphertext:    descriptor.DescriptorCiphertext,
+		DescriptorEnvelope:      descriptor.DescriptorEnvelope,
+		BlobEncryption:          descriptor.BlobEncryption,
+		ThumbnailBlobEncryption: descriptor.ThumbnailBlobEncryption,
+		Filename:                attachment.Filename,
+		ExternalLink:            externalLink,
+		Type:                    attachment.Type,
+		Size:                    models.Int64ToString(attachment.Size),
+		ThumbnailName:           thumbnailName,
+		ThumbnailExternalLink:   thumbnailExternalLink,
+		ThumbnailFilename:       attachment.ThumbnailFilename,
+		ThumbnailType:           attachment.ThumbnailType,
+		Memo:                    memoName,
+	}
+}
+
+type storedAttachmentEncryptionMetadata struct {
+	DescriptorCiphertext    string              `json:"descriptorCiphertext"`
+	DescriptorEnvelope      *apiPayloadEnvelope `json:"descriptorEnvelope"`
+	BlobEncryption          string              `json:"blobEncryption"`
+	ThumbnailBlobEncryption string              `json:"thumbnailBlobEncryption"`
+}
+
+const (
+	payloadEnvelopeSlotTypeAccountMaster = "account_master"
+	payloadEnvelopeSlotTypeAccountPublic = "account_public"
+	payloadEnvelopeSlotTypeGroupKeyVer   = "group_key_version"
+
+	payloadWrapAlgorithmAccountMaster = "AES_GCM_ACCOUNT_MASTER_KEY_V1"
+	payloadWrapAlgorithmAccountPublic = "RSA_OAEP_SHA256_V1"
+	payloadWrapAlgorithmGroupKeyVer   = "AES_GCM_GROUP_KEY_V1"
+)
+
+func parseAttachmentEncryptionMetadata(raw string) storedAttachmentEncryptionMetadata {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return storedAttachmentEncryptionMetadata{}
+	}
+	var metadata storedAttachmentEncryptionMetadata
+	if err := json.Unmarshal([]byte(trimmed), &metadata); err != nil {
+		return storedAttachmentEncryptionMetadata{}
+	}
+	return metadata
+}
+
+func marshalAttachmentEncryptionMetadata(
+	descriptorCiphertext string,
+	descriptorEnvelope *apiPayloadEnvelope,
+	blobEncryption string,
+	thumbnailBlobEncryption string,
+) (string, error) {
+	raw, err := json.Marshal(storedAttachmentEncryptionMetadata{
+		DescriptorCiphertext:    strings.TrimSpace(descriptorCiphertext),
+		DescriptorEnvelope:      descriptorEnvelope,
+		BlobEncryption:          strings.TrimSpace(blobEncryption),
+		ThumbnailBlobEncryption: strings.TrimSpace(thumbnailBlobEncryption),
+	})
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
+}
+
+func parsePayloadEnvelope(raw string) *apiPayloadEnvelope {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil
+	}
+	var envelope apiPayloadEnvelope
+	if err := json.Unmarshal([]byte(trimmed), &envelope); err != nil {
+		return nil
+	}
+	return &envelope
+}
+
+func mustMarshalPayloadEnvelope(envelope *apiPayloadEnvelope) string {
+	if envelope == nil {
+		return ""
+	}
+	raw, err := json.Marshal(envelope)
+	if err != nil {
+		return ""
+	}
+	return string(raw)
+}
+
+func toAPIGroupKeyVersion(version models.GroupKeyVersion, recipients []models.GroupKeyVersionRecipient) apiGroupKeyVersion {
+	wrappedKeys := make([]apiWrappedKeySlot, 0, len(recipients))
+	for _, recipient := range recipients {
+		wrappedKeys = append(wrappedKeys, apiWrappedKeySlot{
+			SlotType:      "account_public",
+			SlotRef:       recipient.SlotRef,
+			WrapAlgorithm: recipient.WrapAlgorithm,
+			WrappedKey:    recipient.WrappedKey,
+		})
+	}
+	return apiGroupKeyVersion{
+		Name:        fmt.Sprintf("groups/%d/keyVersions/%d", version.GroupID, version.Version),
+		Group:       fmt.Sprintf("groups/%d", version.GroupID),
+		Version:     version.Version,
+		Algorithm:   version.Algorithm,
+		WrappedKeys: wrappedKeys,
+		CreateTime:  formatMaybeTime(version.CreateTime),
+		UpdateTime:  formatMaybeTime(version.UpdateTime),
 	}
 }
 
@@ -288,6 +378,146 @@ func parseNonNegativeInt64(raw string) (int64, error) {
 		return 0, fmt.Errorf("invalid integer")
 	}
 	return v, nil
+}
+
+func trimUpdatedText(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*value)
+	return &trimmed
+}
+
+func validatePayloadEnvelope(envelope *apiPayloadEnvelope) error {
+	if envelope == nil {
+		return fmt.Errorf("payload envelope is required")
+	}
+	if len(envelope.WrappedKeys) == 0 {
+		return fmt.Errorf("payload envelope wrappedKeys is required")
+	}
+	for _, wrappedKey := range envelope.WrappedKeys {
+		slotType := strings.TrimSpace(wrappedKey.SlotType)
+		if slotType == "" ||
+			strings.TrimSpace(wrappedKey.SlotRef) == "" ||
+			strings.TrimSpace(wrappedKey.WrapAlgorithm) == "" ||
+			strings.TrimSpace(wrappedKey.WrappedKey) == "" {
+			return fmt.Errorf("payload envelope wrapped key is invalid")
+		}
+		if !isSupportedKeySlotType(slotType) {
+			return fmt.Errorf("payload envelope wrapped key slot type is invalid")
+		}
+		if !isSupportedWrapAlgorithmForSlot(slotType, strings.TrimSpace(wrappedKey.WrapAlgorithm)) {
+			return fmt.Errorf("payload envelope wrapped key algorithm is invalid")
+		}
+	}
+	return nil
+}
+
+func isSupportedKeySlotType(slotType string) bool {
+	switch slotType {
+	case payloadEnvelopeSlotTypeAccountMaster, payloadEnvelopeSlotTypeAccountPublic, payloadEnvelopeSlotTypeGroupKeyVer:
+		return true
+	default:
+		return false
+	}
+}
+
+func isSupportedWrapAlgorithmForSlot(slotType string, wrapAlgorithm string) bool {
+	switch slotType {
+	case payloadEnvelopeSlotTypeAccountMaster:
+		return wrapAlgorithm == payloadWrapAlgorithmAccountMaster
+	case payloadEnvelopeSlotTypeAccountPublic:
+		return wrapAlgorithm == payloadWrapAlgorithmAccountPublic
+	case payloadEnvelopeSlotTypeGroupKeyVer:
+		return wrapAlgorithm == payloadWrapAlgorithmGroupKeyVer
+	default:
+		return false
+	}
+}
+
+func validateGroupKeyVersionWrappedKeys(wrappedKeys []apiWrappedKeySlot) error {
+	if err := validatePayloadEnvelope(&apiPayloadEnvelope{WrappedKeys: wrappedKeys}); err != nil {
+		return err
+	}
+	for _, wrappedKey := range wrappedKeys {
+		if strings.TrimSpace(wrappedKey.SlotType) != payloadEnvelopeSlotTypeAccountPublic {
+			return fmt.Errorf("group key wrapped key slot type is invalid")
+		}
+	}
+	return nil
+}
+
+func (e *apiPayloadEnvelope) asJSONStringPointer() *string {
+	if e == nil {
+		return nil
+	}
+	raw := mustMarshalPayloadEnvelope(e)
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	return &raw
+}
+
+func attachmentNamesFromAPI(attachments []apiAttachment) []string {
+	names := make([]string, 0, len(attachments))
+	for _, attachment := range attachments {
+		if strings.TrimSpace(attachment.Name) == "" {
+			continue
+		}
+		names = append(names, attachment.Name)
+	}
+	return names
+}
+
+func attachmentNamesFromAPIPointer(attachments *[]apiAttachment) *[]string {
+	if attachments == nil {
+		return nil
+	}
+	names := attachmentNamesFromAPI(*attachments)
+	return &names
+}
+
+func attachmentBindingsFromAPI(attachments []apiAttachment) ([]service.AttachmentBindingInput, error) {
+	bindings := make([]service.AttachmentBindingInput, 0, len(attachments))
+	for _, attachment := range attachments {
+		name := strings.TrimSpace(attachment.Name)
+		if name == "" {
+			continue
+		}
+		descriptorCiphertext := strings.TrimSpace(attachment.DescriptorCiphertext)
+		blobEncryption := strings.TrimSpace(attachment.BlobEncryption)
+		if descriptorCiphertext == "" || attachment.DescriptorEnvelope == nil || blobEncryption == "" {
+			return nil, fmt.Errorf("missing attachment encryption metadata")
+		}
+		if err := validatePayloadEnvelope(attachment.DescriptorEnvelope); err != nil {
+			return nil, fmt.Errorf("invalid descriptor envelope")
+		}
+		raw, err := marshalAttachmentEncryptionMetadata(
+			descriptorCiphertext,
+			attachment.DescriptorEnvelope,
+			blobEncryption,
+			attachment.ThumbnailBlobEncryption,
+		)
+		if err != nil {
+			return nil, err
+		}
+		bindings = append(bindings, service.AttachmentBindingInput{
+			Name:                          name,
+			AssociationEncryptionMetadata: raw,
+		})
+	}
+	return bindings, nil
+}
+
+func attachmentBindingsFromAPIPointer(attachments *[]apiAttachment) (*[]service.AttachmentBindingInput, error) {
+	if attachments == nil {
+		return nil, nil
+	}
+	bindings, err := attachmentBindingsFromAPI(*attachments)
+	if err != nil {
+		return nil, err
+	}
+	return &bindings, nil
 }
 
 func parseSingleByteRange(raw string, size int64) (start int64, end int64, hasRange bool, err error) {

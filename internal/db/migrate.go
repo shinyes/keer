@@ -31,10 +31,39 @@ func Migrate(db *sql.DB) error {
 			revoked_at TEXT,
 			FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
 		);`,
+		`CREATE TABLE IF NOT EXISTS refresh_tokens (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id INTEGER NOT NULL,
+			token_prefix TEXT NOT NULL,
+			token_hash TEXT NOT NULL UNIQUE,
+			created_at TEXT NOT NULL,
+			last_used_at TEXT,
+			expires_at TEXT NOT NULL,
+			revoked_at TEXT,
+			FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_id ON refresh_tokens(user_id);`,
+		`CREATE TABLE IF NOT EXISTS user_encryption_keys (
+			user_id INTEGER PRIMARY KEY,
+			version INTEGER NOT NULL,
+			kdf_algorithm TEXT NOT NULL,
+			kdf_salt TEXT NOT NULL,
+			kdf_iterations INTEGER NOT NULL,
+			wrap_algorithm TEXT NOT NULL,
+			wrapped_account_key TEXT NOT NULL,
+			sharing_public_key TEXT NOT NULL DEFAULT '',
+			wrapped_sharing_private_key TEXT NOT NULL DEFAULT '',
+			key_version INTEGER NOT NULL DEFAULT 1,
+			algorithms TEXT NOT NULL DEFAULT '',
+			create_time TEXT NOT NULL,
+			update_time TEXT NOT NULL,
+			FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+		);`,
 		`CREATE TABLE IF NOT EXISTS memos (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			creator_id INTEGER NOT NULL,
 			content TEXT NOT NULL,
+			payload_envelope TEXT NOT NULL DEFAULT '',
 			visibility TEXT NOT NULL DEFAULT 'PRIVATE',
 			state TEXT NOT NULL DEFAULT 'NORMAL',
 			pinned INTEGER NOT NULL DEFAULT 0,
@@ -124,12 +153,23 @@ func Migrate(db *sql.DB) error {
 			group_id INTEGER NOT NULL,
 			creator_id INTEGER NOT NULL,
 			content TEXT NOT NULL,
+			payload_envelope TEXT NOT NULL DEFAULT '',
 			create_time TEXT NOT NULL,
 			update_time TEXT NOT NULL,
 			FOREIGN KEY(group_id) REFERENCES groups(id) ON DELETE CASCADE,
 			FOREIGN KEY(creator_id) REFERENCES users(id) ON DELETE CASCADE
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_group_messages_group_time ON group_messages(group_id, create_time ASC, id ASC);`,
+		`CREATE TABLE IF NOT EXISTS group_message_attachments (
+			message_id INTEGER NOT NULL,
+			attachment_id INTEGER NOT NULL,
+			association_encryption_metadata TEXT NOT NULL DEFAULT '',
+			position INTEGER NOT NULL,
+			PRIMARY KEY(message_id, attachment_id),
+			FOREIGN KEY(message_id) REFERENCES group_messages(id) ON DELETE CASCADE,
+			FOREIGN KEY(attachment_id) REFERENCES attachments(id) ON DELETE CASCADE
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_group_message_attachments_message ON group_message_attachments(message_id, position);`,
 		`CREATE TABLE IF NOT EXISTS group_message_tags (
 			message_id INTEGER NOT NULL,
 			group_id INTEGER NOT NULL,
@@ -169,6 +209,7 @@ func Migrate(db *sql.DB) error {
 			type TEXT NOT NULL,
 			size INTEGER NOT NULL,
 			content_hash TEXT NOT NULL,
+			encryption_metadata TEXT NOT NULL DEFAULT '',
 			storage_type TEXT NOT NULL,
 			storage_key TEXT NOT NULL,
 			thumbnail_filename TEXT NOT NULL DEFAULT '',
@@ -184,18 +225,44 @@ func Migrate(db *sql.DB) error {
 		`CREATE TABLE IF NOT EXISTS memo_attachments (
 			memo_id INTEGER NOT NULL,
 			attachment_id INTEGER NOT NULL,
+			association_encryption_metadata TEXT NOT NULL DEFAULT '',
 			position INTEGER NOT NULL,
 			PRIMARY KEY(memo_id, attachment_id),
 			FOREIGN KEY(memo_id) REFERENCES memos(id) ON DELETE CASCADE,
 			FOREIGN KEY(attachment_id) REFERENCES attachments(id) ON DELETE CASCADE
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_memo_attachments_memo ON memo_attachments(memo_id, position);`,
+		`CREATE TABLE IF NOT EXISTS group_key_versions (
+			group_id INTEGER NOT NULL,
+			version INTEGER NOT NULL,
+			algorithm TEXT NOT NULL,
+			create_time TEXT NOT NULL,
+			update_time TEXT NOT NULL,
+			PRIMARY KEY(group_id, version),
+			FOREIGN KEY(group_id) REFERENCES groups(id) ON DELETE CASCADE
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_group_key_versions_group_update ON group_key_versions(group_id, update_time DESC, version DESC);`,
+		`CREATE TABLE IF NOT EXISTS group_key_version_recipients (
+			group_id INTEGER NOT NULL,
+			version INTEGER NOT NULL,
+			user_id INTEGER NOT NULL,
+			slot_ref TEXT NOT NULL,
+			wrap_algorithm TEXT NOT NULL,
+			wrapped_key TEXT NOT NULL,
+			create_time TEXT NOT NULL,
+			update_time TEXT NOT NULL,
+			PRIMARY KEY(group_id, version, user_id),
+			FOREIGN KEY(group_id, version) REFERENCES group_key_versions(group_id, version) ON DELETE CASCADE,
+			FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_group_key_version_recipients_user ON group_key_version_recipients(user_id, group_id, version DESC);`,
 		`CREATE TABLE IF NOT EXISTS attachment_upload_sessions (
 			id TEXT PRIMARY KEY,
 			creator_id INTEGER NOT NULL,
 			filename TEXT NOT NULL,
 			type TEXT NOT NULL,
 			size INTEGER NOT NULL,
+			encryption_metadata TEXT NOT NULL DEFAULT '',
 			memo_name TEXT,
 			temp_path TEXT NOT NULL,
 			thumbnail_filename TEXT NOT NULL DEFAULT '',
@@ -221,6 +288,38 @@ func Migrate(db *sql.DB) error {
 		}
 	}
 
+	if err := ensureColumn(
+		db,
+		"attachments",
+		"encryption_metadata",
+		"TEXT NOT NULL DEFAULT ''",
+	); err != nil {
+		return fmt.Errorf("migration failed: %w", err)
+	}
+	if err := ensureColumn(
+		db,
+		"attachment_upload_sessions",
+		"encryption_metadata",
+		"TEXT NOT NULL DEFAULT ''",
+	); err != nil {
+		return fmt.Errorf("migration failed: %w", err)
+	}
+	if err := ensureColumn(
+		db,
+		"memo_attachments",
+		"association_encryption_metadata",
+		"TEXT NOT NULL DEFAULT ''",
+	); err != nil {
+		return fmt.Errorf("migration failed: %w", err)
+	}
+	if err := ensureColumn(
+		db,
+		"group_message_attachments",
+		"association_encryption_metadata",
+		"TEXT NOT NULL DEFAULT ''",
+	); err != nil {
+		return fmt.Errorf("migration failed: %w", err)
+	}
 	if err := ensureColumn(
 		db,
 		"users",
@@ -249,6 +348,54 @@ func Migrate(db *sql.DB) error {
 		db,
 		"attachment_upload_sessions",
 		"thumbnail_temp_path",
+		"TEXT NOT NULL DEFAULT ''",
+	); err != nil {
+		return fmt.Errorf("migration failed: %w", err)
+	}
+	if err := ensureColumn(
+		db,
+		"user_encryption_keys",
+		"sharing_public_key",
+		"TEXT NOT NULL DEFAULT ''",
+	); err != nil {
+		return fmt.Errorf("migration failed: %w", err)
+	}
+	if err := ensureColumn(
+		db,
+		"user_encryption_keys",
+		"wrapped_sharing_private_key",
+		"TEXT NOT NULL DEFAULT ''",
+	); err != nil {
+		return fmt.Errorf("migration failed: %w", err)
+	}
+	if err := ensureColumn(
+		db,
+		"user_encryption_keys",
+		"key_version",
+		"INTEGER NOT NULL DEFAULT 1",
+	); err != nil {
+		return fmt.Errorf("migration failed: %w", err)
+	}
+	if err := ensureColumn(
+		db,
+		"user_encryption_keys",
+		"algorithms",
+		"TEXT NOT NULL DEFAULT ''",
+	); err != nil {
+		return fmt.Errorf("migration failed: %w", err)
+	}
+	if err := ensureColumn(
+		db,
+		"memos",
+		"payload_envelope",
+		"TEXT NOT NULL DEFAULT ''",
+	); err != nil {
+		return fmt.Errorf("migration failed: %w", err)
+	}
+	if err := ensureColumn(
+		db,
+		"group_messages",
+		"payload_envelope",
 		"TEXT NOT NULL DEFAULT ''",
 	); err != nil {
 		return fmt.Errorf("migration failed: %w", err)

@@ -20,6 +20,7 @@ func TestCreateMemo_AllowsEmptyContentWithAttachments(t *testing.T) {
 		"image/png",
 		1024,
 		"memo-compat-test-hash",
+		"",
 		"LOCAL",
 		"attachments/test/image.png",
 	)
@@ -28,9 +29,11 @@ func TestCreateMemo_AllowsEmptyContentWithAttachments(t *testing.T) {
 	}
 
 	memo, err := services.memoService.CreateMemo(ctx, user.ID, CreateMemoInput{
-		Content:         "",
-		Visibility:      models.VisibilityPrivate,
-		AttachmentNames: []string{"attachments/" + models.Int64ToString(attachment.ID)},
+		Content:    "",
+		Visibility: models.VisibilityPrivate,
+		AttachmentBindings: []AttachmentBindingInput{
+			{Name: "attachments/" + models.Int64ToString(attachment.ID)},
+		},
 	})
 	if err != nil {
 		t.Fatalf("CreateMemo() error = %v", err)
@@ -105,9 +108,11 @@ func TestCreateMemo_AttachmentResolutionFailureIsAtomic(t *testing.T) {
 	user := mustCreateUser(t, services.store, "memo-attach-atomic")
 
 	_, err := services.memoService.CreateMemo(ctx, user.ID, CreateMemoInput{
-		Content:         "content",
-		Visibility:      models.VisibilityPrivate,
-		AttachmentNames: []string{"attachments/999999"},
+		Content:    "content",
+		Visibility: models.VisibilityPrivate,
+		AttachmentBindings: []AttachmentBindingInput{
+			{Name: "attachments/999999"},
+		},
 	})
 	if err == nil {
 		t.Fatalf("expected CreateMemo() error for non-existing attachment")
@@ -137,8 +142,10 @@ func TestUpdateMemo_AttachmentResolutionFailureIsAtomic(t *testing.T) {
 
 	newContent := "after"
 	_, err = services.memoService.UpdateMemo(ctx, user.ID, created.Memo.ID, UpdateMemoInput{
-		Content:         &newContent,
-		AttachmentNames: &[]string{"attachments/999999"},
+		Content: &newContent,
+		AttachmentBindings: &[]AttachmentBindingInput{
+			{Name: "attachments/999999"},
+		},
 	})
 	if err == nil {
 		t.Fatalf("expected UpdateMemo() error for non-existing attachment")

@@ -52,18 +52,20 @@ func NewAttachmentService(s *store.SQLStore, fileStorage storage.Store) *Attachm
 }
 
 type CreateAttachmentInput struct {
-	Filename string
-	Type     string
-	Content  string
-	MemoName *string
+	Filename           string
+	Type               string
+	Content            string
+	EncryptionMetadata string
+	MemoName           *string
 }
 
 type CreateAttachmentUploadSessionInput struct {
-	Filename  string
-	Type      string
-	Size      int64
-	MemoName  *string
-	Thumbnail *CreateAttachmentUploadSessionThumbnailInput
+	Filename           string
+	Type               string
+	Size               int64
+	EncryptionMetadata string
+	MemoName           *string
+	Thumbnail          *CreateAttachmentUploadSessionThumbnailInput
 }
 
 type CreateAttachmentUploadSessionThumbnailInput struct {
@@ -174,6 +176,7 @@ func (s *AttachmentService) CreateAttachment(ctx context.Context, userID int64, 
 		contentType,
 		size,
 		contentHash,
+		strings.TrimSpace(input.EncryptionMetadata),
 		storageTypeName(s.storage),
 		storageKey,
 	)
@@ -295,19 +298,20 @@ func (s *AttachmentService) CreateAttachmentUploadSession(ctx context.Context, u
 		}
 		now := time.Now().UTC()
 		session, err := s.store.CreateAttachmentUploadSession(ctx, models.AttachmentUploadSession{
-			ID:                uploadID,
-			CreatorID:         userID,
-			Filename:          filename,
-			Type:              contentType,
-			Size:              input.Size,
-			MemoName:          memoName,
-			TempPath:          tempPath,
-			ThumbnailFilename: thumbnailFilename,
-			ThumbnailType:     thumbnailType,
-			ThumbnailTempPath: thumbnailTempPath,
-			ReceivedSize:      0,
-			CreateTime:        now,
-			UpdateTime:        now,
+			ID:                 uploadID,
+			CreatorID:          userID,
+			Filename:           filename,
+			Type:               contentType,
+			Size:               input.Size,
+			EncryptionMetadata: strings.TrimSpace(input.EncryptionMetadata),
+			MemoName:           memoName,
+			TempPath:           tempPath,
+			ThumbnailFilename:  thumbnailFilename,
+			ThumbnailType:      thumbnailType,
+			ThumbnailTempPath:  thumbnailTempPath,
+			ReceivedSize:       0,
+			CreateTime:         now,
+			UpdateTime:         now,
 		})
 		if err != nil {
 			if thumbnailTempPath != "" {
@@ -336,19 +340,20 @@ func (s *AttachmentService) CreateAttachmentUploadSession(ctx context.Context, u
 
 	now := time.Now().UTC()
 	session, err := s.store.CreateAttachmentUploadSession(ctx, models.AttachmentUploadSession{
-		ID:                uploadID,
-		CreatorID:         userID,
-		Filename:          filename,
-		Type:              contentType,
-		Size:              input.Size,
-		MemoName:          memoName,
-		TempPath:          tempPath,
-		ThumbnailFilename: thumbnailFilename,
-		ThumbnailType:     thumbnailType,
-		ThumbnailTempPath: thumbnailTempPath,
-		ReceivedSize:      0,
-		CreateTime:        now,
-		UpdateTime:        now,
+		ID:                 uploadID,
+		CreatorID:          userID,
+		Filename:           filename,
+		Type:               contentType,
+		Size:               input.Size,
+		EncryptionMetadata: strings.TrimSpace(input.EncryptionMetadata),
+		MemoName:           memoName,
+		TempPath:           tempPath,
+		ThumbnailFilename:  thumbnailFilename,
+		ThumbnailType:      thumbnailType,
+		ThumbnailTempPath:  thumbnailTempPath,
+		ReceivedSize:       0,
+		CreateTime:         now,
+		UpdateTime:         now,
 	})
 	if err != nil {
 		_ = os.Remove(tempPath)
@@ -678,6 +683,7 @@ func (s *AttachmentService) CompleteAttachmentUploadSession(ctx context.Context,
 			session.Type,
 			existing.Size,
 			contentHash,
+			session.EncryptionMetadata,
 			existing.StorageType,
 			existing.StorageKey,
 		)
@@ -717,6 +723,7 @@ func (s *AttachmentService) CompleteAttachmentUploadSession(ctx context.Context,
 			session.Type,
 			size,
 			contentHash,
+			session.EncryptionMetadata,
 			storageTypeName(s.storage),
 			storageKey,
 		)
@@ -788,6 +795,7 @@ func (s *AttachmentService) completeDirectAttachmentUploadSession(
 		session.Type,
 		size,
 		contentHash,
+		session.EncryptionMetadata,
 		storageTypeName(s.storage),
 		storageKey,
 	)
@@ -858,6 +866,7 @@ func (s *AttachmentService) completeMultipartAttachmentUploadSession(
 		session.Type,
 		uploadedSize,
 		contentHash,
+		session.EncryptionMetadata,
 		storageTypeName(s.storage),
 		multipart.StorageKey,
 	)
@@ -928,6 +937,10 @@ func (s *AttachmentService) DeleteAttachment(ctx context.Context, userID int64, 
 
 func (s *AttachmentService) GetAttachment(ctx context.Context, attachmentID int64) (models.Attachment, error) {
 	return s.store.GetAttachmentByID(ctx, attachmentID)
+}
+
+func (s *AttachmentService) AttachmentVisibleToUser(ctx context.Context, attachmentID int64, userID int64) (bool, error) {
+	return s.store.AttachmentVisibleToUser(ctx, attachmentID, userID)
 }
 
 func (s *AttachmentService) OpenAttachmentStream(ctx context.Context, attachment models.Attachment) (io.ReadCloser, error) {
@@ -1018,19 +1031,22 @@ func (s *AttachmentService) attachToMemo(ctx context.Context, memoID int64, atta
 	if err != nil {
 		return err
 	}
-	attachmentIDs := make([]int64, 0, len(attachedMap[memoID])+1)
+	attachments := make([]store.AttachmentBinding, 0, len(attachedMap[memoID])+1)
 	seen := make(map[int64]struct{}, len(attachedMap[memoID])+1)
 	for _, item := range attachedMap[memoID] {
 		if _, ok := seen[item.ID]; ok {
 			continue
 		}
-		attachmentIDs = append(attachmentIDs, item.ID)
+		attachments = append(attachments, store.AttachmentBinding{
+			AttachmentID:                  item.ID,
+			AssociationEncryptionMetadata: item.AssociationEncryptionMetadata,
+		})
 		seen[item.ID] = struct{}{}
 	}
 	if _, ok := seen[attachmentID]; !ok {
-		attachmentIDs = append(attachmentIDs, attachmentID)
+		attachments = append(attachments, store.AttachmentBinding{AttachmentID: attachmentID})
 	}
-	return s.store.SetMemoAttachments(ctx, memoID, attachmentIDs)
+	return s.store.SetMemoAttachments(ctx, memoID, attachments)
 }
 
 func (s *AttachmentService) newAttachmentStorageKey(ctx context.Context, userID int64, filename string) (string, error) {

@@ -24,15 +24,21 @@ func (s *SQLStore) DB() *sql.DB {
 }
 
 type MemoUpdate struct {
-	Content      *string
-	Visibility   *models.Visibility
-	State        *models.MemoState
-	Pinned       *bool
-	LatitudeSet  bool
-	Latitude     *float64
-	LongitudeSet bool
-	Longitude    *float64
-	Payload      *models.MemoPayload
+	Content         *string
+	PayloadEnvelope *string
+	Visibility      *models.Visibility
+	State           *models.MemoState
+	Pinned          *bool
+	LatitudeSet     bool
+	Latitude        *float64
+	LongitudeSet    bool
+	Longitude       *float64
+	Payload         *models.MemoPayload
+}
+
+type AttachmentBinding struct {
+	AttachmentID                  int64
+	AssociationEncryptionMetadata string
 }
 
 type MemoQueryBounds struct {
@@ -74,6 +80,7 @@ func scanMemo(scanner interface {
 	Scan(dest ...any) error
 }) (models.Memo, error) {
 	var memo models.Memo
+	var payloadEnvelope string
 	var visibility string
 	var state string
 	var pinned int
@@ -90,6 +97,7 @@ func scanMemo(scanner interface {
 		&memo.ID,
 		&memo.CreatorID,
 		&memo.Content,
+		&payloadEnvelope,
 		&visibility,
 		&state,
 		&pinned,
@@ -113,6 +121,7 @@ func scanMemo(scanner interface {
 	if err != nil {
 		return models.Memo{}, err
 	}
+	memo.PayloadEnvelope = payloadEnvelope
 	memo.UpdateTime, err = parseTime(updateTime)
 	if err != nil {
 		return models.Memo{}, err
@@ -148,6 +157,7 @@ func scanAttachment(scanner interface {
 		&attachment.ExternalLink,
 		&attachment.Type,
 		&attachment.Size,
+		&attachment.EncryptionMetadata,
 		&attachment.StorageType,
 		&attachment.StorageKey,
 		&attachment.ThumbnailFilename,

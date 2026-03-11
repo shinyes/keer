@@ -142,12 +142,25 @@ func registerGroupRoutes(
 		if err := c.BodyParser(&req); err != nil {
 			return badRequest(c, "invalid request body")
 		}
+		encryptedPayload := strings.TrimSpace(req.EncryptedPayload)
+		if encryptedPayload == "" {
+			return badRequest(c, "encryptedPayload is required")
+		}
+		if err := validatePayloadEnvelope(&req.PayloadEnvelope); err != nil {
+			return badRequest(c, "invalid payloadEnvelope")
+		}
+		attachmentBindings, err := attachmentBindingsFromAPI(req.Attachments)
+		if err != nil {
+			return badRequest(c, "invalid attachment bindings")
+		}
 		msg, err := groupService.CreateGroupMessage(
 			c.Context(),
 			currentUser.ID,
 			groupID,
-			req.Content,
+			encryptedPayload,
+			mustMarshalPayloadEnvelope(&req.PayloadEnvelope),
 			req.Tags,
+			attachmentBindings,
 		)
 		if err != nil {
 			if mapped := mapNoRowsToNotFound(c, err, "group not found"); mapped != nil {
@@ -172,14 +185,28 @@ func registerGroupRoutes(
 		if err := c.BodyParser(&req); err != nil {
 			return badRequest(c, "invalid request body")
 		}
+		attachmentBindings, err := attachmentBindingsFromAPIPointer(req.Attachments)
+		if err != nil {
+			return badRequest(c, "invalid attachment bindings")
+		}
+		if req.EncryptedPayload != nil && strings.TrimSpace(*req.EncryptedPayload) == "" {
+			return badRequest(c, "encryptedPayload must not be empty")
+		}
+		if req.PayloadEnvelope != nil {
+			if err := validatePayloadEnvelope(req.PayloadEnvelope); err != nil {
+				return badRequest(c, "invalid payloadEnvelope")
+			}
+		}
 
 		updated, err := groupService.UpdateGroupMessage(
 			c.Context(),
 			currentUser.ID,
 			groupID,
 			messageID,
-			req.Content,
+			trimUpdatedText(req.EncryptedPayload),
+			req.PayloadEnvelope.asJSONStringPointer(),
 			req.Tags,
+			attachmentBindings,
 		)
 		if err != nil {
 			if mapped := mapGroupMessageMutationError(c, err, "group message not found", true); mapped != nil {
@@ -247,5 +274,60 @@ func registerGroupRoutes(
 			return badRequest(c, err.Error())
 		}
 		return c.JSON(listGroupTagsResponse{Tags: tags})
+	})
+
+	api.Get("/groups/:id/keyVersions/current", func(c *fiber.Ctx) error {
+		currentUser := CurrentUser(c)
+		groupID, err := parseRequiredIDParam(c, "id", "invalid group id")
+		if err != nil {
+			return err
+		}
+		version, recipients, err := groupService.GetCurrentGroupKeyVersion(c.Context(), currentUser.ID, groupID)
+		if err != nil {
+			if mapped := mapNoRowsToNotFound(c, err, "group key version not found"); mapped != nil {
+				return mapped
+			}
+			return internalError(c, err)
+		}
+		return c.JSON(groupKeyVersionResponse{
+			GroupKeyVersion: toAPIGroupKeyVersion(version, recipients),
+		})
+	})
+
+	api.Post("/groups/:id/keyVersions", func(c *fiber.Ctx) error {
+		currentUser := CurrentUser(c)
+		groupID, err := parseRequiredIDParam(c, "id", "invalid group id")
+		if err != nil {
+			return err
+		}
+		var req createGroupKeyVersionRequest
+		if err := c.BodyParser(&req); err != nil {
+			return badRequest(c, "invalid request body")
+		}
+		if err := validateGroupKeyVersionWrappedKeys(req.GroupKeyVersion.WrappedKeys); err != nil {
+			return badRequest(c, "invalid group key wrappedKeys")
+		}
+		wrappedKeys := make([]service.WrappedKeySlotInput, 0, len(req.GroupKeyVersion.WrappedKeys))
+		for _, wrappedKey := range req.GroupKeyVersion.WrappedKeys {
+			wrappedKeys = append(wrappedKeys, service.WrappedKeySlotInput{
+				SlotType:      wrappedKey.SlotType,
+				SlotRef:       wrappedKey.SlotRef,
+				WrapAlgorithm: wrappedKey.WrapAlgorithm,
+				WrappedKey:    wrappedKey.WrappedKey,
+			})
+		}
+		version, recipients, err := groupService.CreateGroupKeyVersion(c.Context(), currentUser.ID, groupID, service.CreateGroupKeyVersionInput{
+			Algorithm:   req.GroupKeyVersion.Algorithm,
+			WrappedKeys: wrappedKeys,
+		})
+		if err != nil {
+			if mapped := mapNoRowsToNotFound(c, err, "group not found"); mapped != nil {
+				return mapped
+			}
+			return badRequest(c, err.Error())
+		}
+		return c.JSON(groupKeyVersionResponse{
+			GroupKeyVersion: toAPIGroupKeyVersion(version, recipients),
+		})
 	})
 }

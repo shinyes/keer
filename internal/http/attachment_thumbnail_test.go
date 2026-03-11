@@ -20,9 +20,19 @@ func TestAttachmentThumbnailServing(t *testing.T) {
 
 	imageBytes := generateThumbnailTestJPEG(t, 1400, 900)
 	createPayload := map[string]any{
-		"filename": "scene.jpg",
-		"type":     "image/jpeg",
-		"content":  base64.StdEncoding.EncodeToString(imageBytes),
+		"filename":             "scene.jpg",
+		"type":                 "image/jpeg",
+		"content":              base64.StdEncoding.EncodeToString(imageBytes),
+		"descriptorCiphertext": "scene-descriptor",
+		"descriptorEnvelope": map[string]any{"wrappedKeys": []any{
+			map[string]any{
+				"slotType":      "account_master",
+				"slotRef":       "users/1",
+				"wrapAlgorithm": "AES_GCM_ACCOUNT_MASTER_KEY_V1",
+				"wrappedKey":    "scene-wrapped-key",
+			},
+		}},
+		"blobEncryption": "scene-blob",
 	}
 	createBody, _ := json.Marshal(createPayload)
 	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/attachments", bytes.NewReader(createBody))

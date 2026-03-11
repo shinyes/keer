@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/shinyes/keer/internal/models"
@@ -21,26 +22,33 @@ func NewMemoService(s *store.SQLStore) *MemoService {
 }
 
 type CreateMemoInput struct {
-	Content         string
-	Visibility      models.Visibility
-	Tags            []string
-	AttachmentNames []string
-	CreateTime      *time.Time // 客户端指定的创建时间，为 nil 时使用当前时间
-	Latitude        *float64
-	Longitude       *float64
+	Content            string
+	PayloadEnvelope    string
+	Visibility         models.Visibility
+	Tags               []string
+	AttachmentBindings []AttachmentBindingInput
+	CreateTime         *time.Time // 客户端指定的创建时间，为 nil 时使用当前时间
+	Latitude           *float64
+	Longitude          *float64
+}
+
+type AttachmentBindingInput struct {
+	Name                          string
+	AssociationEncryptionMetadata string
 }
 
 type UpdateMemoInput struct {
-	Content         *string
-	Visibility      *models.Visibility
-	Tags            *[]string
-	State           *models.MemoState
-	Pinned          *bool
-	AttachmentNames *[]string
-	LatitudeSet     bool
-	Latitude        *float64
-	LongitudeSet    bool
-	Longitude       *float64
+	Content            *string
+	PayloadEnvelope    *string
+	Visibility         *models.Visibility
+	Tags               *[]string
+	State              *models.MemoState
+	Pinned             *bool
+	AttachmentBindings *[]AttachmentBindingInput
+	LatitudeSet        bool
+	Latitude           *float64
+	LongitudeSet       bool
+	Longitude          *float64
 }
 
 type MemoWithAttachments struct {
@@ -66,10 +74,10 @@ func (s *MemoService) CreateMemo(ctx context.Context, creatorID int64, input Cre
 	}
 
 	payload := models.MemoPayload{
-		Tags: normalizeMemoTags(input.Tags),
+		Tags: normalizeMemoTags(mergeCollaboratorTags(input.Tags, input.PayloadEnvelope)),
 	}
 
-	attachmentIDs, err := s.resolveAttachmentIDsFromNames(ctx, creatorID, input.AttachmentNames)
+	attachmentBindings, err := s.resolveAttachmentBindingsFromCreateInput(ctx, creatorID, input.AttachmentBindings)
 	if err != nil {
 		return MemoWithAttachments{}, err
 	}
@@ -83,6 +91,7 @@ func (s *MemoService) CreateMemo(ctx context.Context, creatorID int64, input Cre
 		ctx,
 		creatorID,
 		content,
+		strings.TrimSpace(input.PayloadEnvelope),
 		visibility,
 		models.MemoStateNormal,
 		false,
@@ -90,7 +99,7 @@ func (s *MemoService) CreateMemo(ctx context.Context, creatorID int64, input Cre
 		createTime,
 		input.Latitude,
 		input.Longitude,
-		attachmentIDs,
+		attachmentBindings,
 	)
 	if err != nil {
 		return MemoWithAttachments{}, err
@@ -125,8 +134,21 @@ func (s *MemoService) UpdateMemo(ctx context.Context, updaterID int64, memoID in
 		payload.Property = models.MemoPayloadProperty{}
 		update.Payload = &payload
 	}
+	if input.PayloadEnvelope != nil {
+		payloadEnvelope := strings.TrimSpace(*input.PayloadEnvelope)
+		update.PayloadEnvelope = &payloadEnvelope
+	}
 	if input.Tags != nil {
-		nextTags := normalizeMemoTags(*input.Tags)
+		nextTags := normalizeMemoTags(mergeCollaboratorTags(*input.Tags, stringValue(input.PayloadEnvelope)))
+		if update.Payload != nil {
+			update.Payload.Tags = nextTags
+		} else {
+			payload := current.Payload
+			payload.Tags = nextTags
+			update.Payload = &payload
+		}
+	} else if input.PayloadEnvelope != nil {
+		nextTags := normalizeMemoTags(mergeCollaboratorTags(nil, *input.PayloadEnvelope))
 		if update.Payload != nil {
 			update.Payload.Tags = nextTags
 		} else {
@@ -159,22 +181,22 @@ func (s *MemoService) UpdateMemo(ctx context.Context, updaterID int64, memoID in
 		update.Longitude = input.Longitude
 	}
 
-	var attachmentIDs *[]int64
-	if input.AttachmentNames != nil {
-		ids, err := s.resolveAttachmentIDsForMemoUpdate(
+	var attachmentBindings *[]store.AttachmentBinding
+	if input.AttachmentBindings != nil {
+		bindings, err := s.resolveAttachmentBindingsForMemoUpdate(
 			ctx,
 			updaterID,
 			current.CreatorID,
 			current.ID,
-			*input.AttachmentNames,
+			*input.AttachmentBindings,
 		)
 		if err != nil {
 			return MemoWithAttachments{}, err
 		}
-		attachmentIDs = &ids
+		attachmentBindings = &bindings
 	}
 
-	updatedMemo, err := s.store.UpdateMemoWithAttachments(ctx, memoID, update, attachmentIDs)
+	updatedMemo, err := s.store.UpdateMemoWithAttachments(ctx, memoID, update, attachmentBindings)
 	if err != nil {
 		return MemoWithAttachments{}, err
 	}

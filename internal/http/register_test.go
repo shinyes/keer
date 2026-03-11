@@ -159,6 +159,9 @@ func TestSignInEndpoint_ThenAuthMe(t *testing.T) {
 	if signInResult.AccessToken == "" {
 		t.Fatalf("expected non-empty accessToken")
 	}
+	if signInResult.RefreshToken == "" {
+		t.Fatalf("expected non-empty refreshToken")
+	}
 	if signInResult.User.Username != "signin01" {
 		t.Fatalf("expected username signin01, got %s", signInResult.User.Username)
 	}
@@ -172,6 +175,32 @@ func TestSignInEndpoint_ThenAuthMe(t *testing.T) {
 	defer meResp.Body.Close()
 	if meResp.StatusCode != http.StatusOK {
 		t.Fatalf("expected auth/me 200, got %d", meResp.StatusCode)
+	}
+
+	refreshBody := map[string]any{
+		"refreshToken": signInResult.RefreshToken,
+	}
+	refreshPayload, _ := json.Marshal(refreshBody)
+	refreshReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/refresh", bytes.NewReader(refreshPayload))
+	refreshReq.Header.Set("Content-Type", "application/json")
+	refreshResp, err := app.Test(refreshReq, 5000)
+	if err != nil {
+		t.Fatalf("refresh request failed: %v", err)
+	}
+	defer refreshResp.Body.Close()
+	if refreshResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected refresh 200, got %d", refreshResp.StatusCode)
+	}
+
+	var refreshResult signInResponse
+	if err := json.NewDecoder(refreshResp.Body).Decode(&refreshResult); err != nil {
+		t.Fatalf("decode refresh response failed: %v", err)
+	}
+	if refreshResult.AccessToken == "" || refreshResult.RefreshToken == "" {
+		t.Fatalf("expected non-empty refreshed tokens")
+	}
+	if refreshResult.RefreshToken == signInResult.RefreshToken {
+		t.Fatalf("expected refresh token rotation")
 	}
 }
 

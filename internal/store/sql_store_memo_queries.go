@@ -10,11 +10,12 @@ import (
 	"github.com/shinyes/keer/internal/models"
 )
 
-func (s *SQLStore) CreateMemo(ctx context.Context, creatorID int64, content string, visibility models.Visibility, state models.MemoState, pinned bool, payload models.MemoPayload, createTime time.Time, latitude *float64, longitude *float64) (models.Memo, error) {
+func (s *SQLStore) CreateMemo(ctx context.Context, creatorID int64, content string, payloadEnvelope string, visibility models.Visibility, state models.MemoState, pinned bool, payload models.MemoPayload, createTime time.Time, latitude *float64, longitude *float64) (models.Memo, error) {
 	return s.CreateMemoWithAttachments(
 		ctx,
 		creatorID,
 		content,
+		payloadEnvelope,
 		visibility,
 		state,
 		pinned,
@@ -22,11 +23,11 @@ func (s *SQLStore) CreateMemo(ctx context.Context, creatorID int64, content stri
 		createTime,
 		latitude,
 		longitude,
-		[]int64{},
+		[]AttachmentBinding{},
 	)
 }
 
-func (s *SQLStore) CreateMemoWithAttachments(ctx context.Context, creatorID int64, content string, visibility models.Visibility, state models.MemoState, pinned bool, payload models.MemoPayload, createTime time.Time, latitude *float64, longitude *float64, attachmentIDs []int64) (models.Memo, error) {
+func (s *SQLStore) CreateMemoWithAttachments(ctx context.Context, creatorID int64, content string, payloadEnvelope string, visibility models.Visibility, state models.MemoState, pinned bool, payload models.MemoPayload, createTime time.Time, latitude *float64, longitude *float64, attachments []AttachmentBinding) (models.Memo, error) {
 	now := time.Now().UTC()
 	pinnedInt := 0
 	if pinned {
@@ -42,12 +43,13 @@ func (s *SQLStore) CreateMemoWithAttachments(ctx context.Context, creatorID int6
 	res, err := tx.ExecContext(
 		ctx,
 		`INSERT INTO memos (
-			creator_id, content, visibility, state, pinned, create_time, update_time, display_time,
+			creator_id, content, payload_envelope, visibility, state, pinned, create_time, update_time, display_time,
 			latitude, longitude, has_link, has_task_list, has_code, has_incomplete_tasks
 		)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		creatorID,
 		content,
+		payloadEnvelope,
 		visibility,
 		state,
 		pinnedInt,
@@ -68,7 +70,7 @@ func (s *SQLStore) CreateMemoWithAttachments(ctx context.Context, creatorID int6
 	if err != nil {
 		return models.Memo{}, err
 	}
-	if err := setMemoAttachmentsInTx(ctx, tx, memoID, attachmentIDs); err != nil {
+	if err := setMemoAttachmentsInTx(ctx, tx, memoID, attachments); err != nil {
 		return models.Memo{}, err
 	}
 	if err := setMemoTagsInTx(ctx, tx, creatorID, memoID, payload.Tags); err != nil {
@@ -83,7 +85,7 @@ func (s *SQLStore) CreateMemoWithAttachments(ctx context.Context, creatorID int6
 func (s *SQLStore) GetMemoByID(ctx context.Context, id int64) (models.Memo, error) {
 	row := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, creator_id, content, visibility, state, pinned, create_time, update_time, display_time, latitude, longitude, has_link, has_task_list, has_code, has_incomplete_tasks
+		`SELECT id, creator_id, content, payload_envelope, visibility, state, pinned, create_time, update_time, display_time, latitude, longitude, has_link, has_task_list, has_code, has_incomplete_tasks
 		FROM memos
 		WHERE id = ?`,
 		id,
@@ -107,7 +109,7 @@ func (s *SQLStore) UpdateMemo(ctx context.Context, memoID int64, update MemoUpda
 	return s.UpdateMemoWithAttachments(ctx, memoID, update, nil)
 }
 
-func (s *SQLStore) UpdateMemoWithAttachments(ctx context.Context, memoID int64, update MemoUpdate, attachmentIDs *[]int64) (models.Memo, error) {
+func (s *SQLStore) UpdateMemoWithAttachments(ctx context.Context, memoID int64, update MemoUpdate, attachments *[]AttachmentBinding) (models.Memo, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return models.Memo{}, err
@@ -133,6 +135,10 @@ func (s *SQLStore) UpdateMemoWithAttachments(ctx context.Context, memoID int64, 
 	if update.Content != nil {
 		assignments = append(assignments, "content = ?")
 		args = append(args, *update.Content)
+	}
+	if update.PayloadEnvelope != nil {
+		assignments = append(assignments, "payload_envelope = ?")
+		args = append(args, *update.PayloadEnvelope)
 	}
 	if update.Visibility != nil {
 		assignments = append(assignments, "visibility = ?")
@@ -186,8 +192,8 @@ func (s *SQLStore) UpdateMemoWithAttachments(ctx context.Context, memoID int64, 
 		return models.Memo{}, err
 	}
 
-	if attachmentIDs != nil {
-		if err := setMemoAttachmentsInTx(ctx, tx, memoID, *attachmentIDs); err != nil {
+	if attachments != nil {
+		if err := setMemoAttachmentsInTx(ctx, tx, memoID, *attachments); err != nil {
 			return models.Memo{}, err
 		}
 	}
@@ -293,7 +299,7 @@ func (s *SQLStore) ListVisibleMemos(
 	}
 
 	collaboratorTag := fmt.Sprintf("collab/%d", viewerID)
-	query := `SELECT m.id, m.creator_id, m.content, m.visibility, m.state, m.pinned, m.create_time, m.update_time, m.display_time, m.latitude, m.longitude, m.has_link, m.has_task_list, m.has_code, m.has_incomplete_tasks
+	query := `SELECT m.id, m.creator_id, m.content, m.payload_envelope, m.visibility, m.state, m.pinned, m.create_time, m.update_time, m.display_time, m.latitude, m.longitude, m.has_link, m.has_task_list, m.has_code, m.has_incomplete_tasks
 		FROM memos m
 		WHERE (
 			m.creator_id = ?
@@ -559,7 +565,7 @@ func (s *SQLStore) ListDeletedVisibleMemoNames(
 }
 
 func (s *SQLStore) ListVisibleMemosByCreator(ctx context.Context, creatorID int64, viewerID int64, state models.MemoState) ([]models.Memo, error) {
-	query := `SELECT id, creator_id, content, visibility, state, pinned, create_time, update_time, display_time, latitude, longitude, has_link, has_task_list, has_code, has_incomplete_tasks
+	query := `SELECT id, creator_id, content, payload_envelope, visibility, state, pinned, create_time, update_time, display_time, latitude, longitude, has_link, has_task_list, has_code, has_incomplete_tasks
 		FROM memos
 		WHERE creator_id = ? AND state = ?`
 	args := []any{creatorID, state}
@@ -604,7 +610,7 @@ func (s *SQLStore) ListVisibleMemosByCreator(ctx context.Context, creatorID int6
 func (s *SQLStore) ListAllMemos(ctx context.Context) ([]models.Memo, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT id, creator_id, content, visibility, state, pinned, create_time, update_time, display_time, latitude, longitude, has_link, has_task_list, has_code, has_incomplete_tasks
+		`SELECT id, creator_id, content, payload_envelope, visibility, state, pinned, create_time, update_time, display_time, latitude, longitude, has_link, has_task_list, has_code, has_incomplete_tasks
 		FROM memos
 		ORDER BY id`,
 	)
@@ -660,18 +666,19 @@ func (s *SQLStore) UpdateMemoPayload(ctx context.Context, memoID int64, payload 
 	return tx.Commit()
 }
 
-func (s *SQLStore) CreateAttachment(ctx context.Context, creatorID int64, filename string, externalLink string, fileType string, size int64, contentHash string, storageType string, storageKey string) (models.Attachment, error) {
+func (s *SQLStore) CreateAttachment(ctx context.Context, creatorID int64, filename string, externalLink string, fileType string, size int64, contentHash string, encryptionMetadata string, storageType string, storageKey string) (models.Attachment, error) {
 	now := time.Now().UTC()
 	res, err := s.db.ExecContext(
 		ctx,
-		`INSERT INTO attachments (creator_id, filename, external_link, type, size, content_hash, storage_type, storage_key, create_time)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO attachments (creator_id, filename, external_link, type, size, content_hash, encryption_metadata, storage_type, storage_key, create_time)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		creatorID,
 		filename,
 		externalLink,
 		fileType,
 		size,
 		contentHash,
+		encryptionMetadata,
 		storageType,
 		storageKey,
 		now.Format(time.RFC3339Nano),
@@ -736,6 +743,7 @@ func (s *SQLStore) CreateAttachmentUploadSession(ctx context.Context, session mo
 			filename,
 			type,
 			size,
+			encryption_metadata,
 			memo_name,
 			temp_path,
 			thumbnail_filename,
@@ -744,12 +752,13 @@ func (s *SQLStore) CreateAttachmentUploadSession(ctx context.Context, session mo
 			received_size,
 			create_time,
 			update_time
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		session.ID,
 		session.CreatorID,
 		session.Filename,
 		session.Type,
 		session.Size,
+		session.EncryptionMetadata,
 		session.MemoName,
 		session.TempPath,
 		session.ThumbnailFilename,
@@ -778,6 +787,7 @@ func (s *SQLStore) GetAttachmentUploadSessionByID(ctx context.Context, id string
 			filename,
 			type,
 			size,
+			encryption_metadata,
 			memo_name,
 			temp_path,
 			thumbnail_filename,
@@ -795,6 +805,7 @@ func (s *SQLStore) GetAttachmentUploadSessionByID(ctx context.Context, id string
 		&session.Filename,
 		&session.Type,
 		&session.Size,
+		&session.EncryptionMetadata,
 		&memoName,
 		&session.TempPath,
 		&session.ThumbnailFilename,
@@ -857,6 +868,7 @@ func (s *SQLStore) ListAttachmentUploadSessionsUpdatedBefore(ctx context.Context
 			filename,
 			type,
 			size,
+			encryption_metadata,
 			memo_name,
 			temp_path,
 			thumbnail_filename,
@@ -889,6 +901,7 @@ func (s *SQLStore) ListAttachmentUploadSessionsUpdatedBefore(ctx context.Context
 			&session.Filename,
 			&session.Type,
 			&session.Size,
+			&session.EncryptionMetadata,
 			&memoName,
 			&session.TempPath,
 			&session.ThumbnailFilename,
@@ -931,7 +944,7 @@ func (s *SQLStore) FindAttachmentByContentHash(ctx context.Context, creatorID in
 	var createTime string
 	err := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, creator_id, filename, external_link, type, size, storage_type, storage_key, thumbnail_filename, thumbnail_type, thumbnail_size, thumbnail_storage_type, thumbnail_storage_key, create_time
+		`SELECT id, creator_id, filename, external_link, type, size, encryption_metadata, storage_type, storage_key, thumbnail_filename, thumbnail_type, thumbnail_size, thumbnail_storage_type, thumbnail_storage_key, create_time
 		FROM attachments
 		WHERE creator_id = ? AND content_hash = ?
 		ORDER BY id DESC
@@ -945,6 +958,7 @@ func (s *SQLStore) FindAttachmentByContentHash(ctx context.Context, creatorID in
 		&attachment.ExternalLink,
 		&attachment.Type,
 		&attachment.Size,
+		&attachment.EncryptionMetadata,
 		&attachment.StorageType,
 		&attachment.StorageKey,
 		&attachment.ThumbnailFilename,
@@ -973,7 +987,7 @@ func (s *SQLStore) ListAttachmentCandidates(ctx context.Context, creatorID int64
 	}
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT id, creator_id, filename, external_link, type, size, storage_type, storage_key, thumbnail_filename, thumbnail_type, thumbnail_size, thumbnail_storage_type, thumbnail_storage_key, create_time
+		`SELECT id, creator_id, filename, external_link, type, size, encryption_metadata, storage_type, storage_key, thumbnail_filename, thumbnail_type, thumbnail_size, thumbnail_storage_type, thumbnail_storage_key, create_time
 		FROM attachments
 		WHERE creator_id = ? AND filename = ? AND type = ? AND size = ?
 		ORDER BY id DESC
@@ -1005,7 +1019,7 @@ func (s *SQLStore) GetAttachmentByID(ctx context.Context, id int64) (models.Atta
 	var createTime string
 	err := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, creator_id, filename, external_link, type, size, storage_type, storage_key, thumbnail_filename, thumbnail_type, thumbnail_size, thumbnail_storage_type, thumbnail_storage_key, create_time
+		`SELECT id, creator_id, filename, external_link, type, size, encryption_metadata, storage_type, storage_key, thumbnail_filename, thumbnail_type, thumbnail_size, thumbnail_storage_type, thumbnail_storage_key, create_time
 		FROM attachments
 		WHERE id = ?`,
 		id,
@@ -1016,6 +1030,7 @@ func (s *SQLStore) GetAttachmentByID(ctx context.Context, id int64) (models.Atta
 		&attachment.ExternalLink,
 		&attachment.Type,
 		&attachment.Size,
+		&attachment.EncryptionMetadata,
 		&attachment.StorageType,
 		&attachment.StorageKey,
 		&attachment.ThumbnailFilename,
@@ -1038,7 +1053,7 @@ func (s *SQLStore) GetAttachmentByID(ctx context.Context, id int64) (models.Atta
 func (s *SQLStore) ListAttachmentsByCreator(ctx context.Context, creatorID int64) ([]models.Attachment, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT id, creator_id, filename, external_link, type, size, storage_type, storage_key, thumbnail_filename, thumbnail_type, thumbnail_size, thumbnail_storage_type, thumbnail_storage_key, create_time
+		`SELECT id, creator_id, filename, external_link, type, size, encryption_metadata, storage_type, storage_key, thumbnail_filename, thumbnail_type, thumbnail_size, thumbnail_storage_type, thumbnail_storage_key, create_time
 		FROM attachments
 		WHERE creator_id = ?
 		ORDER BY id DESC`,
@@ -1073,29 +1088,30 @@ func (s *SQLStore) CountAttachmentsByStorageKey(ctx context.Context, storageKey 
 	return count, nil
 }
 
-func (s *SQLStore) SetMemoAttachments(ctx context.Context, memoID int64, attachmentIDs []int64) error {
+func (s *SQLStore) SetMemoAttachments(ctx context.Context, memoID int64, attachments []AttachmentBinding) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	if err := setMemoAttachmentsInTx(ctx, tx, memoID, attachmentIDs); err != nil {
+	if err := setMemoAttachmentsInTx(ctx, tx, memoID, attachments); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
-func setMemoAttachmentsInTx(ctx context.Context, tx *sql.Tx, memoID int64, attachmentIDs []int64) error {
+func setMemoAttachmentsInTx(ctx context.Context, tx *sql.Tx, memoID int64, attachments []AttachmentBinding) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM memo_attachments WHERE memo_id = ?`, memoID); err != nil {
 		return err
 	}
-	for i, attachmentID := range attachmentIDs {
+	for i, attachment := range attachments {
 		if _, err := tx.ExecContext(
 			ctx,
-			`INSERT INTO memo_attachments (memo_id, attachment_id, position) VALUES (?, ?, ?)`,
+			`INSERT INTO memo_attachments (memo_id, attachment_id, association_encryption_metadata, position) VALUES (?, ?, ?, ?)`,
 			memoID,
-			attachmentID,
+			attachment.AttachmentID,
+			strings.TrimSpace(attachment.AssociationEncryptionMetadata),
 			i,
 		); err != nil {
 			return err
@@ -1277,7 +1293,7 @@ func (s *SQLStore) ListAttachmentsByMemoIDs(ctx context.Context, memoIDs []int64
 	}
 
 	query := fmt.Sprintf(
-		`SELECT ma.memo_id, a.id, a.creator_id, a.filename, a.external_link, a.type, a.size, a.storage_type, a.storage_key, a.thumbnail_filename, a.thumbnail_type, a.thumbnail_size, a.thumbnail_storage_type, a.thumbnail_storage_key, a.create_time
+		`SELECT ma.memo_id, a.id, a.creator_id, a.filename, a.external_link, a.type, a.size, a.encryption_metadata, ma.association_encryption_metadata, a.storage_type, a.storage_key, a.thumbnail_filename, a.thumbnail_type, a.thumbnail_size, a.thumbnail_storage_type, a.thumbnail_storage_key, a.create_time
 		FROM memo_attachments ma
 		JOIN attachments a ON a.id = ma.attachment_id
 		WHERE ma.memo_id IN (%s)
@@ -1302,6 +1318,8 @@ func (s *SQLStore) ListAttachmentsByMemoIDs(ctx context.Context, memoIDs []int64
 			&attachment.ExternalLink,
 			&attachment.Type,
 			&attachment.Size,
+			&attachment.EncryptionMetadata,
+			&attachment.AssociationEncryptionMetadata,
 			&attachment.StorageType,
 			&attachment.StorageKey,
 			&attachment.ThumbnailFilename,
@@ -1336,7 +1354,7 @@ func (s *SQLStore) AttachmentBelongsToUser(ctx context.Context, attachmentID int
 func (s *SQLStore) GetMemoByIDAndCreator(ctx context.Context, memoID int64, creatorID int64) (models.Memo, error) {
 	row := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, creator_id, content, visibility, state, pinned, create_time, update_time, display_time, latitude, longitude, has_link, has_task_list, has_code, has_incomplete_tasks
+		`SELECT id, creator_id, content, payload_envelope, visibility, state, pinned, create_time, update_time, display_time, latitude, longitude, has_link, has_task_list, has_code, has_incomplete_tasks
 		FROM memos
 		WHERE id = ? AND creator_id = ?`,
 		memoID,

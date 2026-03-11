@@ -1,0 +1,138 @@
+name: release-binaries
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag (e.g. v2.0.16 or v2.0.16-beta.1)"
+        required: true
+        type: string
+  push:
+    tags:
+      - "v[0-9]*.[0-9]*.[0-9]*"
+      - "v[0-9]*.[0-9]*.[0-9]*-alpha.*"
+      - "v[0-9]*.[0-9]*.[0-9]*-beta.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            archive: tar.gz
+          - goos: linux
+            goarch: arm64
+            archive: tar.gz
+          - goos: darwin
+            goarch: amd64
+            archive: tar.gz
+          - goos: darwin
+            goarch: arm64
+            archive: tar.gz
+          - goos: windows
+            goarch: amd64
+            archive: zip
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve release metadata
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ github.event.inputs.release_tag || github.ref_name }}"
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)\.[0-9]+)?$ ]]; then
+            echo "Tag '$TAG' is not supported. Expected formats: v0.9.0, v0.9.0-alpha.0, or v0.9.0-beta.0"
+            exit 1
+          fi
+          if [[ "$TAG" == *-* ]]; then
+            IS_PRERELEASE=true
+          else
+            IS_PRERELEASE=false
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "is_prerelease=$IS_PRERELEASE" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Download Dependencies
+        run: go mod download
+
+      - name: Build Archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+
+          ext=""
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            ext=".exe"
+          fi
+
+          binary_name="keer-${{ steps.meta.outputs.tag }}-${{ matrix.goos }}-${{ matrix.goarch }}${ext}"
+          archive_base="keer-${{ steps.meta.outputs.tag }}-${{ matrix.goos }}-${{ matrix.goarch }}"
+
+          CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
+            go build -trimpath -ldflags="-s -w" -o "dist/${binary_name}" ./cmd/server
+
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            (
+              cd dist
+              zip "${archive_base}.zip" "${binary_name}"
+            )
+            echo "ASSET=dist/${archive_base}.zip" >> "$GITHUB_ENV"
+          else
+            tar -C dist -czf "dist/${archive_base}.tar.gz" "${binary_name}"
+            echo "ASSET=dist/${archive_base}.tar.gz" >> "$GITHUB_ENV"
+          fi
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: keer-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: ${{ env.ASSET }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Resolve release metadata
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ github.event.inputs.release_tag || github.ref_name }}"
+          if [[ "$TAG" == *-* ]]; then
+            IS_PRERELEASE=true
+          else
+            IS_PRERELEASE=false
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "is_prerelease=$IS_PRERELEASE" >> "$GITHUB_OUTPUT"
+
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          files: release-assets/*
+          generate_release_notes: true
+          prerelease: ${{ steps.meta.outputs.is_prerelease == 'true' }}

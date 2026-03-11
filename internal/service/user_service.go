@@ -26,16 +26,21 @@ import (
 )
 
 type UserService struct {
-	store         *store.SQLStore
-	avatarStorage storage.Store
-	avatarLocks   sync.Map
+	store           *store.SQLStore
+	avatarStorage   storage.Store
+	avatarLocks     sync.Map
+	jwtSecret       []byte
+	accessTokenTTL  time.Duration
+	refreshTokenTTL time.Duration
 }
 
 var (
 	ErrInvalidUsername       = errors.New("invalid username")
 	ErrInvalidDisplayName    = errors.New("invalid display name")
 	ErrInvalidPassword       = errors.New("invalid password")
+	ErrInvalidEncryptionKey  = errors.New("invalid encryption key")
 	ErrInvalidCredentials    = errors.New("invalid credentials")
+	ErrInvalidRefreshToken   = errors.New("invalid refresh token")
 	ErrInvalidRole           = errors.New("invalid role")
 	ErrUsernameAlreadyExists = errors.New("username already exists")
 	ErrTokenAlreadyExists    = errors.New("access token already exists")
@@ -48,9 +53,11 @@ var (
 const settingKeyAllowRegistration = "allow_registration"
 
 const (
-	avatarMaxSourceBytes = 10 * 1024 * 1024
-	avatarMaxDimension   = 4096
-	avatarMaxPixels      = 12_000_000
+	defaultAccessTokenTTL  = 15 * time.Minute
+	defaultRefreshTokenTTL = 30 * 24 * time.Hour
+	avatarMaxSourceBytes   = 10 * 1024 * 1024
+	avatarMaxDimension     = 4096
+	avatarMaxPixels        = 12_000_000
 )
 
 type CreateUserInput struct {
@@ -66,12 +73,77 @@ type UserChanges struct {
 	SyncAnchor time.Time
 }
 
+type UpsertUserEncryptionKeyInput struct {
+	Version                  int
+	KDFAlgorithm             string
+	KDFSalt                  string
+	KDFIterations            int
+	WrapAlgorithm            string
+	WrappedAccountKey        string
+	SharingPublicKey         string
+	WrappedSharingPrivateKey string
+	KeyVersion               int
+	Algorithms               string
+}
+
 func NewUserService(s *store.SQLStore) *UserService {
-	return &UserService{store: s}
+	return &UserService{
+		store:           s,
+		jwtSecret:       []byte("change-me-in-production"),
+		accessTokenTTL:  defaultAccessTokenTTL,
+		refreshTokenTTL: defaultRefreshTokenTTL,
+	}
 }
 
 func (s *UserService) SetAvatarStorage(store storage.Store) {
 	s.avatarStorage = store
+}
+
+func (s *UserService) GetUserEncryptionKey(ctx context.Context, userID int64) (models.UserEncryptionKey, error) {
+	return s.store.GetUserEncryptionKeyByUserID(ctx, userID)
+}
+
+func (s *UserService) UpsertUserEncryptionKey(
+	ctx context.Context,
+	userID int64,
+	input UpsertUserEncryptionKeyInput,
+) (models.UserEncryptionKey, error) {
+	input.KDFAlgorithm = strings.TrimSpace(input.KDFAlgorithm)
+	input.KDFSalt = strings.TrimSpace(input.KDFSalt)
+	input.WrapAlgorithm = strings.TrimSpace(input.WrapAlgorithm)
+	input.WrappedAccountKey = strings.TrimSpace(input.WrappedAccountKey)
+	input.SharingPublicKey = strings.TrimSpace(input.SharingPublicKey)
+	input.WrappedSharingPrivateKey = strings.TrimSpace(input.WrappedSharingPrivateKey)
+	input.Algorithms = strings.TrimSpace(input.Algorithms)
+	if input.KeyVersion <= 0 {
+		input.KeyVersion = 1
+	}
+	if userID <= 0 ||
+		input.Version <= 0 ||
+		input.KDFAlgorithm == "" ||
+		input.KDFSalt == "" ||
+		input.KDFIterations <= 0 ||
+		input.WrapAlgorithm == "" ||
+		input.WrappedAccountKey == "" {
+		return models.UserEncryptionKey{}, ErrInvalidEncryptionKey
+	}
+	if (input.SharingPublicKey == "") != (input.WrappedSharingPrivateKey == "") {
+		return models.UserEncryptionKey{}, ErrInvalidEncryptionKey
+	}
+
+	return s.store.UpsertUserEncryptionKey(ctx, models.UserEncryptionKey{
+		UserID:                   userID,
+		Version:                  input.Version,
+		KDFAlgorithm:             input.KDFAlgorithm,
+		KDFSalt:                  input.KDFSalt,
+		KDFIterations:            input.KDFIterations,
+		WrapAlgorithm:            input.WrapAlgorithm,
+		WrappedAccountKey:        input.WrappedAccountKey,
+		SharingPublicKey:         input.SharingPublicKey,
+		WrappedSharingPrivateKey: input.WrappedSharingPrivateKey,
+		KeyVersion:               input.KeyVersion,
+		Algorithms:               input.Algorithms,
+	})
 }
 
 func (s *UserService) GetUser(ctx context.Context, userID int64) (models.User, error) {
@@ -407,31 +479,31 @@ func (s *UserService) RevokeAccessTokenByID(ctx context.Context, tokenID int64) 
 	return s.store.GetPersonalAccessTokenByID(ctx, tokenID)
 }
 
-func (s *UserService) SignInWithPassword(ctx context.Context, username string, password string) (models.User, string, error) {
+func (s *UserService) SignInWithPassword(ctx context.Context, username string, password string) (models.User, SessionTokens, error) {
 	username = normalizeUsername(username)
 	if username == "" || password == "" {
-		return models.User{}, "", ErrInvalidCredentials
+		return models.User{}, SessionTokens{}, ErrInvalidCredentials
 	}
 
 	user, err := s.store.GetUserByUsername(ctx, username)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return models.User{}, "", ErrInvalidCredentials
+			return models.User{}, SessionTokens{}, ErrInvalidCredentials
 		}
-		return models.User{}, "", err
+		return models.User{}, SessionTokens{}, err
 	}
 	if user.PasswordHash == "" {
-		return models.User{}, "", ErrInvalidCredentials
+		return models.User{}, SessionTokens{}, ErrInvalidCredentials
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
-		return models.User{}, "", ErrInvalidCredentials
+		return models.User{}, SessionTokens{}, ErrInvalidCredentials
 	}
 
-	token, err := s.createAccessToken(ctx, user.ID, "signin token", nil)
+	tokens, err := s.issueSessionTokens(ctx, user.ID)
 	if err != nil {
-		return models.User{}, "", err
+		return models.User{}, SessionTokens{}, err
 	}
-	return user, token, nil
+	return user, tokens, nil
 }
 
 func isUniqueConstraintErr(err error) bool {

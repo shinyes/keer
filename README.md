@@ -1,15 +1,20 @@
-# Keer
+# Keer Backend
 
 Keer 是一个使用 Go 开发的轻量级后端服务，提供用户、Memo、附件、群组与消息能力。默认使用 SQLite，支持本地文件存储和 S3 对象存储。
+
+## 现在的配置原则
+
+- 服务启动只依赖环境变量，不再从数据库读取 S3 配置
+- 旧的 `storage_backend` / `storage_s3_*` 数据库设置在启动时会被清理
+- `local` 与 `s3` 两种存储模式都通过环境变量切换
 
 ## 功能概览
 
 - 用户注册、登录、鉴权（Bearer Token）
-- Memo 的增删改查、变更同步、标签统计
+- Memo 的增删改查与变更同步
 - 附件管理（Base64 直传、分片/断点续传、下载、缩略图）
 - 群组、群消息与群标签管理
-- 过滤表达式（CEL）与标签层级匹配
-- 运行时管理控制台（用户、Token、注册开关、存储配置）
+- 运行时管理控制台（用户、Token、注册开关）
 
 ## 零知识原则（面向端到端加密）
 
@@ -20,52 +25,140 @@ Keer 是一个使用 Go 开发的轻量级后端服务，提供用户、Memo、�
 
 ## 环境要求
 
-- Go `1.25.5`（或兼容 `1.25+`）
+- Go `1.25.5` 或兼容版本
 - Windows / Linux / macOS
+- Docker（如果使用容器部署）
 
-## 快速启动
+## 5 分钟启动
+
+### 1. 本地文件存储
+
+PowerShell:
 
 ```powershell
 $env:APP_ADDR=":12843"
 $env:BASE_URL="http://localhost:12843"
 $env:DB_PATH="./data/keer.db"
 $env:UPLOADS_DIR="./data/uploads"
-$env:KEER_API_VERSION="0.1"
-
-# 可选：首次启动时自动创建引导用户与令牌
+$env:STORAGE_BACKEND="local"
+$env:JWT_SECRET="replace-with-a-long-random-secret"
 $env:BOOTSTRAP_USER="demo"
 $env:BOOTSTRAP_TOKEN="demo-token"
 
 go run ./cmd/server
 ```
 
-服务启动后会进入 `keer>` 运行时控制台（和 HTTP 服务同进程）。
-输入 `help` 查看命令，输入 `exit` 仅退出控制台，不会停止 HTTP 服务。
+Bash:
 
-## 配置项
+```bash
+export APP_ADDR=:12843
+export BASE_URL=http://localhost:12843
+export DB_PATH=./data/keer.db
+export UPLOADS_DIR=./data/uploads
+export STORAGE_BACKEND=local
+export JWT_SECRET=replace-with-a-long-random-secret
+export BOOTSTRAP_USER=demo
+export BOOTSTRAP_TOKEN=demo-token
 
-- `APP_ADDR`：监听地址，默认 `:12843`
-- `BASE_URL`：服务基地址，默认 `http://localhost:12843`
-- `DB_PATH`：SQLite 文件路径，默认 `./data/keer.db`
-- `UPLOADS_DIR`：本地附件目录（仅 local 存储时生效），默认 `./data/uploads`
-- `HTTP_BODY_LIMIT_MB`：HTTP 请求体上限（MiB），默认 `64`
-- `KEER_API_VERSION`：`/api/v1/instance/profile` 返回字段 `keer_api_version`，默认 `0.1`
-- `ALLOW_REGISTRATION`：是否允许公开注册，默认 `true`
-- `BOOTSTRAP_USER`：引导用户名，默认 `demo`
-- `BOOTSTRAP_TOKEN`：引导 token，默认空（为空则不创建引导 token）
-
-## 存储模式
-
-默认存储后端为 `local`。可在运行时控制台切换到 `s3`，配置会持久化到数据库 `system_settings`。
-
-```text
-storage status
-storage set-local
-storage wizard
-storage set-s3 --endpoint "https://<endpoint>" --region "auto" --bucket "<bucket>" --access-key-id "<ak>" --access-key-secret "<sk>" --use-path-style=true
+go run ./cmd/server
 ```
 
-切换存储后端后需要重启服务生效。
+### 2. S3 对象存储
+
+```powershell
+$env:APP_ADDR=":12843"
+$env:BASE_URL="https://api.example.com"
+$env:DB_PATH="./data/keer.db"
+$env:STORAGE_BACKEND="s3"
+$env:S3_ENDPOINT="https://<endpoint>"
+$env:S3_REGION="auto"
+$env:S3_BUCKET="<bucket>"
+$env:S3_ACCESS_KEY_ID="<access-key-id>"
+$env:S3_ACCESS_KEY_SECRET="<access-key-secret>"
+$env:S3_USE_PATH_STYLE="true"
+$env:JWT_SECRET="replace-with-a-long-random-secret"
+
+go run ./cmd/server
+```
+
+服务启动后会进入 `keer>` 运行时控制台。输入 `help` 查看命令，输入 `exit` 只退出控制台，不会停止 HTTP 服务。
+
+## 环境变量
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `APP_ADDR` | `:12843` | HTTP 监听地址 |
+| `BASE_URL` | `http://localhost:12843` | 服务基地址 |
+| `DB_PATH` | `./data/keer.db` | SQLite 数据库路径 |
+| `UPLOADS_DIR` | `./data/uploads` | 本地文件存储目录，仅 `local` 模式生效 |
+| `HTTP_BODY_LIMIT_MB` | `64` | HTTP 请求体上限（MiB） |
+| `KEER_API_VERSION` | `0.1` | `/api/v1/instance/profile` 返回的 API 版本 |
+| `ALLOW_REGISTRATION` | `true` | 是否允许公开注册 |
+| `BOOTSTRAP_USER` | `demo` | 首次启动时引导用户名 |
+| `BOOTSTRAP_TOKEN` | 空 | 首次启动时引导 Personal Access Token；为空则不创建 |
+| `JWT_SECRET` | `change-me-in-production` | JWT 签名密钥，生产环境必须覆盖 |
+| `ACCESS_TOKEN_TTL` | `15m` | Access Token 有效期 |
+| `REFRESH_TOKEN_TTL` | `720h` | Refresh Token 有效期 |
+| `STORAGE_BACKEND` | `local` | 存储后端：`local` 或 `s3` |
+| `S3_ENDPOINT` | 空 | S3 Endpoint，`s3` 模式必填 |
+| `S3_REGION` | 空 | S3 Region，`s3` 模式必填 |
+| `S3_BUCKET` | 空 | S3 Bucket，`s3` 模式必填 |
+| `S3_ACCESS_KEY_ID` | 空 | S3 Access Key ID，`s3` 模式必填 |
+| `S3_ACCESS_KEY_SECRET` | 空 | S3 Access Key Secret，`s3` 模式必填 |
+| `S3_USE_PATH_STYLE` | `true` | 是否启用 path-style 访问 |
+
+说明：
+
+- 当 `STORAGE_BACKEND=s3` 时，所有 `S3_*` 必填项都会在启动时校验
+- `ALLOW_REGISTRATION` 仍可被运行时控制台中的 `registration enable/disable` 持久化覆盖
+
+## Docker
+
+### 本地构建镜像
+
+```bash
+docker build -t keer-backend:local .
+```
+
+### 运行本地文件存储模式
+
+```bash
+docker run --rm -it \
+  -p 12843:12843 \
+  -e BASE_URL=http://localhost:12843 \
+  -e STORAGE_BACKEND=local \
+  -e JWT_SECRET=replace-with-a-long-random-secret \
+  -e BOOTSTRAP_USER=demo \
+  -e BOOTSTRAP_TOKEN=demo-token \
+  -v keer-data:/data \
+  keer-backend:local
+```
+
+### 运行 S3 模式
+
+```bash
+docker run --rm -it \
+  -p 12843:12843 \
+  -e BASE_URL=https://api.example.com \
+  -e STORAGE_BACKEND=s3 \
+  -e S3_ENDPOINT=https://<endpoint> \
+  -e S3_REGION=auto \
+  -e S3_BUCKET=<bucket> \
+  -e S3_ACCESS_KEY_ID=<access-key-id> \
+  -e S3_ACCESS_KEY_SECRET=<access-key-secret> \
+  -e S3_USE_PATH_STYLE=true \
+  -e JWT_SECRET=replace-with-a-long-random-secret \
+  -v keer-data:/data \
+  keer-backend:local
+```
+
+镜像默认：
+
+- 暴露端口 `12843`
+- 将数据库与本地上传目录落到 `/data`
+- 默认环境变量：
+  - `DB_PATH=/data/keer.db`
+  - `UPLOADS_DIR=/data/uploads`
 
 ## 运行时控制台命令
 
@@ -77,18 +170,63 @@ token revoke <token_id>
 registration status
 registration enable
 registration disable
-storage status
-storage set-local
-storage set-s3 ...
-storage wizard
 help
 exit
 ```
 
 说明：
 
-- `token create` 默认 `--ttl 7d`，支持 `d/day/days` 与 `Go duration`（如 `30d`、`24h`、`30m`）
+- `token create` 默认 `--ttl 7d`
 - `registration enable/disable` 会立即影响 `POST /api/v1/users`
+- 存储后端不再支持运行时控制台修改，必须通过环境变量设置并重启服务
+
+## GitHub Actions
+
+仓库内已提供两条工作流：
+
+### `release-binaries.yml`
+
+- 触发条件：
+  - `workflow_dispatch`
+  - 推送标签 `v*`
+- 产物：
+  - Linux `amd64` / `arm64`
+  - macOS `amd64` / `arm64`
+  - Windows `amd64`
+- 标签发布时会自动创建 GitHub Release 并上传压缩包
+
+### `docker-publish.yml`
+
+- 触发条件：
+  - `workflow_dispatch`
+  - 推送 `main`
+  - 推送标签 `v*`
+- 行为：
+  - 使用仓库根目录 `Dockerfile`
+  - 构建 `linux/amd64` 与 `linux/arm64`
+  - 推送到 `ghcr.io/<owner>/keer-backend`
+
+如果你准备直接启用镜像发布，需要确保仓库对 GitHub Container Registry 有 `packages: write` 权限。
+
+## 与 Android 同版本发布
+
+后端现在和 Android 使用同一套 release tag 规则：
+
+- `v3.0.0`
+- `v3.0.0-alpha.1`
+- `v3.0.0-beta.1`
+
+推荐发布顺序：
+
+1. Android 更新 `versionName/versionCode`
+2. Backend 确认当前提交可发布
+3. 分别在两个仓库推送同一个 tag
+
+效果：
+
+- Android 会发布 APK 到 GitHub Release
+- Backend 会发布多平台二进制到 GitHub Release
+- Backend 会同步推送 Docker 镜像到 `ghcr.io/<owner>/keer-backend`
 
 ## 鉴权与登录
 
@@ -106,7 +244,7 @@ Content-Type: application/json
 }
 ```
 
-成功后返回 `accessToken`，后续请求使用：
+成功后返回 `accessToken` 与 `refreshToken`，后续请求使用：
 
 ```http
 Authorization: Bearer <accessToken>
@@ -118,6 +256,7 @@ Authorization: Bearer <accessToken>
 
 - `GET /api/v1/instance/profile`
 - `POST /api/v1/auth/signin`
+- `POST /api/v1/auth/refresh`
 - `POST /api/v1/users`
 
 用户接口：
@@ -126,7 +265,6 @@ Authorization: Bearer <accessToken>
 - `GET /api/v1/users/{name}`
 - `PATCH /api/v1/users/{name}`
 - `GET /api/v1/users/{name}/settings/GENERAL`
-- `GET /api/v1/users/{name}:getStats`
 - `GET /api/v1/users/batch`
 - `GET /api/v1/users/changes`
 
@@ -164,28 +302,10 @@ Memo 接口：
 - `POST /api/v1/groups/{id}/messages`
 - `PATCH /api/v1/groups/{id}/messages/{messageId}`
 - `DELETE /api/v1/groups/{id}/messages/{messageId}`
-- `GET /api/v1/groups/{id}/tags`
-- `POST /api/v1/groups/{id}/tags`
-
-## 过滤表达式（CEL）
-
-`GET /api/v1/memos` 与 `GET /api/v1/memos/changes` 的 `filter` 参数支持 CEL。
-
-常见写法示例：
-
-- `creator_id == 1 && visibility in ["PRIVATE"]`
-- `tag in ["book"]`（匹配 `book` 和 `book/...`）
-- `"work" in tags`
-- `tags.exists(t, t.startsWith("book"))`
-
-说明：
-
-- 会先做一层 SQL 安全下推，再进行 CEL 最终求值
-- 为保证性能与边界清晰，基于 `content` / `property` 的过滤会被拒绝
 
 ## 测试
 
-```powershell
+```bash
 go test ./...
 go vet ./...
 ```

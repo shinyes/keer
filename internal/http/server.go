@@ -51,12 +51,12 @@ func NewRouter(
 	}))
 
 	buildAPIAttachment := func(attachment models.Attachment, memoName string) apiAttachment {
-		return toAPIAttachment(attachment, memoName, "", "")
+		return toAPIAttachment(attachment, memoName, "", "", false)
 	}
 
 	buildAPIMemo := func(memo service.MemoWithAttachments) apiMemo {
 		return toAPIMemo(memo, func(attachment models.Attachment, memoName string) apiAttachment {
-			return buildAPIAttachment(attachment, memoName)
+			return toAPIAttachment(attachment, memoName, "", "", true)
 		})
 	}
 
@@ -75,7 +75,7 @@ func NewRouter(
 			return badRequest(c, "passwordCredentials is required")
 		}
 
-		user, accessToken, err := userService.SignInWithPassword(
+		user, tokens, err := userService.SignInWithPassword(
 			c.Context(),
 			req.PasswordCredentials.Username,
 			req.PasswordCredentials.Password,
@@ -90,8 +90,39 @@ func NewRouter(
 		}
 
 		return c.JSON(signInResponse{
-			User:        toAPIUser(user),
-			AccessToken: accessToken,
+			User:                  toAPIUser(user),
+			AccessToken:           tokens.AccessToken,
+			AccessTokenExpiresAt:  formatTime(tokens.AccessTokenExpiresAt),
+			RefreshToken:          tokens.RefreshToken,
+			RefreshTokenExpiresAt: formatTime(tokens.RefreshTokenExpiresAt),
+		})
+	})
+
+	app.Post("/api/v1/auth/refresh", func(c *fiber.Ctx) error {
+		var req refreshSessionRequest
+		if err := c.BodyParser(&req); err != nil {
+			return badRequest(c, "invalid request body")
+		}
+		if strings.TrimSpace(req.RefreshToken) == "" {
+			return badRequest(c, "refreshToken is required")
+		}
+
+		user, tokens, err := userService.RefreshSession(c.Context(), req.RefreshToken)
+		if err != nil {
+			switch {
+			case errors.Is(err, service.ErrInvalidRefreshToken):
+				return writeError(c, fiber.StatusUnauthorized, "UNAUTHORIZED", "invalid refresh token")
+			default:
+				return internalError(c, err)
+			}
+		}
+
+		return c.JSON(signInResponse{
+			User:                  toAPIUser(user),
+			AccessToken:           tokens.AccessToken,
+			AccessTokenExpiresAt:  formatTime(tokens.AccessTokenExpiresAt),
+			RefreshToken:          tokens.RefreshToken,
+			RefreshTokenExpiresAt: formatTime(tokens.RefreshTokenExpiresAt),
 		})
 	})
 
@@ -171,14 +202,33 @@ func NewRouter(
 		if err := c.BodyParser(&req); err != nil {
 			return badRequest(c, "invalid request body")
 		}
+		if strings.TrimSpace(req.DescriptorCiphertext) == "" {
+			return badRequest(c, "descriptorCiphertext is required")
+		}
+		if err := validatePayloadEnvelope(req.DescriptorEnvelope); err != nil {
+			return badRequest(c, "invalid descriptorEnvelope")
+		}
+		if strings.TrimSpace(req.BlobEncryption) == "" {
+			return badRequest(c, "blobEncryption is required")
+		}
+		encryptionMetadata, err := marshalAttachmentEncryptionMetadata(
+			req.DescriptorCiphertext,
+			req.DescriptorEnvelope,
+			req.BlobEncryption,
+			req.ThumbnailBlobEncryption,
+		)
+		if err != nil {
+			return badRequest(c, "invalid attachment encryption metadata")
+		}
 		attachment, err := attachmentService.CreateAttachment(
 			c.Context(),
 			currentUser.ID,
 			service.CreateAttachmentInput{
-				Filename: req.Filename,
-				Type:     req.Type,
-				Content:  req.Content,
-				MemoName: req.Memo,
+				Filename:           req.Filename,
+				Type:               req.Type,
+				Content:            req.Content,
+				EncryptionMetadata: encryptionMetadata,
+				MemoName:           req.Memo,
 			},
 		)
 		if err != nil {
@@ -193,6 +243,15 @@ func NewRouter(
 		if err := c.BodyParser(&req); err != nil {
 			return badRequest(c, "invalid request body")
 		}
+		if strings.TrimSpace(req.DescriptorCiphertext) == "" {
+			return badRequest(c, "descriptorCiphertext is required")
+		}
+		if err := validatePayloadEnvelope(req.DescriptorEnvelope); err != nil {
+			return badRequest(c, "invalid descriptorEnvelope")
+		}
+		if strings.TrimSpace(req.BlobEncryption) == "" {
+			return badRequest(c, "blobEncryption is required")
+		}
 		var thumbnail *service.CreateAttachmentUploadSessionThumbnailInput
 		if req.Thumbnail != nil {
 			thumbnail = &service.CreateAttachmentUploadSessionThumbnailInput{
@@ -201,16 +260,26 @@ func NewRouter(
 				Content:  req.Thumbnail.Content,
 			}
 		}
+		encryptionMetadata, err := marshalAttachmentEncryptionMetadata(
+			req.DescriptorCiphertext,
+			req.DescriptorEnvelope,
+			req.BlobEncryption,
+			req.ThumbnailBlobEncryption,
+		)
+		if err != nil {
+			return badRequest(c, "invalid attachment encryption metadata")
+		}
 
 		session, err := attachmentService.CreateAttachmentUploadSession(
 			c.Context(),
 			currentUser.ID,
 			service.CreateAttachmentUploadSessionInput{
-				Filename:  req.Filename,
-				Type:      req.Type,
-				Size:      req.Size,
-				MemoName:  req.Memo,
-				Thumbnail: thumbnail,
+				Filename:           req.Filename,
+				Type:               req.Type,
+				Size:               req.Size,
+				EncryptionMetadata: encryptionMetadata,
+				MemoName:           req.Memo,
+				Thumbnail:          thumbnail,
 			},
 		)
 		if err != nil {
@@ -466,7 +535,11 @@ func NewRouter(
 			return internalError(c, err)
 		}
 
-		if attachment.CreatorID != currentUser.ID {
+		allowed, err := attachmentService.AttachmentVisibleToUser(c.Context(), attachmentID, currentUser.ID)
+		if err != nil {
+			return internalError(c, err)
+		}
+		if !allowed {
 			return c.SendStatus(fiber.StatusForbidden)
 		}
 		if strings.TrimSpace(attachment.ThumbnailStorageKey) == "" {
@@ -550,7 +623,11 @@ func NewRouter(
 			return internalError(c, err)
 		}
 
-		if attachment.CreatorID != currentUser.ID {
+		allowed, err := attachmentService.AttachmentVisibleToUser(c.Context(), attachmentID, currentUser.ID)
+		if err != nil {
+			return internalError(c, err)
+		}
+		if !allowed {
 			return c.SendStatus(fiber.StatusForbidden)
 		}
 		if directURL, ok, err := attachmentService.PresignAttachmentURL(c.Context(), attachment); err != nil {

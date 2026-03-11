@@ -101,12 +101,16 @@ func registerMemoRoutes(
 		if err := c.BodyParser(&req); err != nil {
 			return badRequest(c, "invalid request body")
 		}
-		attachmentNames := make([]string, 0, len(req.Attachments))
-		for _, attachment := range req.Attachments {
-			if attachment.Name == "" {
-				continue
-			}
-			attachmentNames = append(attachmentNames, attachment.Name)
+		encryptedPayload := strings.TrimSpace(req.EncryptedPayload)
+		if encryptedPayload == "" {
+			return badRequest(c, "encryptedPayload is required")
+		}
+		if err := validatePayloadEnvelope(&req.PayloadEnvelope); err != nil {
+			return badRequest(c, "invalid payloadEnvelope")
+		}
+		attachmentBindings, err := attachmentBindingsFromAPI(req.Attachments)
+		if err != nil {
+			return badRequest(c, "invalid attachment bindings")
 		}
 
 		visibility := models.Visibility(req.Visibility)
@@ -123,13 +127,14 @@ func registerMemoRoutes(
 			c.Context(),
 			currentUser.ID,
 			service.CreateMemoInput{
-				Content:         req.Content,
-				Visibility:      visibility,
-				Tags:            req.Tags,
-				AttachmentNames: attachmentNames,
-				CreateTime:      createTime,
-				Latitude:        req.Latitude,
-				Longitude:       req.Longitude,
+				Content:            encryptedPayload,
+				PayloadEnvelope:    mustMarshalPayloadEnvelope(&req.PayloadEnvelope),
+				Visibility:         visibility,
+				Tags:               req.Tags,
+				AttachmentBindings: attachmentBindings,
+				CreateTime:         createTime,
+				Latitude:           req.Latitude,
+				Longitude:          req.Longitude,
 			},
 		)
 		if err != nil {
@@ -160,32 +165,38 @@ func registerMemoRoutes(
 			s := models.MemoState(*req.State)
 			state = &s
 		}
-		var attachmentNames *[]string
+		var attachmentBindings *[]service.AttachmentBindingInput
 		if req.Attachments != nil {
-			names := make([]string, 0, len(*req.Attachments))
-			for _, attachment := range *req.Attachments {
-				if attachment.Name == "" {
-					continue
-				}
-				names = append(names, attachment.Name)
+			bindings, err := attachmentBindingsFromAPIPointer(req.Attachments)
+			if err != nil {
+				return badRequest(c, "invalid attachment bindings")
 			}
-			attachmentNames = &names
+			attachmentBindings = bindings
+		}
+		if req.EncryptedPayload != nil && strings.TrimSpace(*req.EncryptedPayload) == "" {
+			return badRequest(c, "encryptedPayload must not be empty")
+		}
+		if req.PayloadEnvelope != nil {
+			if err := validatePayloadEnvelope(req.PayloadEnvelope); err != nil {
+				return badRequest(c, "invalid payloadEnvelope")
+			}
 		}
 		updated, err := memoService.UpdateMemo(
 			c.Context(),
 			currentUser.ID,
 			memoID,
 			service.UpdateMemoInput{
-				Content:         req.Content,
-				Visibility:      visibility,
-				Tags:            req.Tags,
-				State:           state,
-				Pinned:          req.Pinned,
-				AttachmentNames: attachmentNames,
-				LatitudeSet:     req.Latitude.Set,
-				Latitude:        req.Latitude.Value,
-				LongitudeSet:    req.Longitude.Set,
-				Longitude:       req.Longitude.Value,
+				Content:            trimUpdatedText(req.EncryptedPayload),
+				PayloadEnvelope:    req.PayloadEnvelope.asJSONStringPointer(),
+				Visibility:         visibility,
+				Tags:               req.Tags,
+				State:              state,
+				Pinned:             req.Pinned,
+				AttachmentBindings: attachmentBindings,
+				LatitudeSet:        req.Latitude.Set,
+				Latitude:           req.Latitude.Value,
+				LongitudeSet:       req.Longitude.Set,
+				Longitude:          req.Longitude.Value,
 			},
 		)
 		if err != nil {

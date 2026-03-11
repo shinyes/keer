@@ -20,9 +20,15 @@ type signInPasswordCredentials struct {
 }
 
 type signInResponse struct {
-	User                 apiUser `json:"user"`
-	AccessToken          string  `json:"accessToken"`
-	AccessTokenExpiresAt string  `json:"accessTokenExpiresAt,omitempty"`
+	User                  apiUser `json:"user"`
+	AccessToken           string  `json:"accessToken"`
+	AccessTokenExpiresAt  string  `json:"accessTokenExpiresAt,omitempty"`
+	RefreshToken          string  `json:"refreshToken"`
+	RefreshTokenExpiresAt string  `json:"refreshTokenExpiresAt,omitempty"`
+}
+
+type refreshSessionRequest struct {
+	RefreshToken string `json:"refreshToken"`
 }
 
 type createUserRequest struct {
@@ -89,58 +95,54 @@ type listMemoChangesResponse struct {
 	SyncAnchor       string    `json:"syncAnchor"`
 }
 
+type apiWrappedKeySlot struct {
+	SlotType      string `json:"slotType"`
+	SlotRef       string `json:"slotRef"`
+	WrapAlgorithm string `json:"wrapAlgorithm"`
+	WrappedKey    string `json:"wrappedKey"`
+}
+
+type apiPayloadEnvelope struct {
+	WrappedKeys []apiWrappedKeySlot `json:"wrappedKeys"`
+}
+
 type createMemoRequest struct {
-	Content     string          `json:"content"`
-	Visibility  string          `json:"visibility"`
-	Tags        []string        `json:"tags,omitempty"`
-	Attachments []apiAttachment `json:"attachments"`
-	CreateTime  *string         `json:"createTime"`
-	Latitude    *float64        `json:"latitude,omitempty"`
-	Longitude   *float64        `json:"longitude,omitempty"`
+	EncryptedPayload string             `json:"encryptedPayload"`
+	PayloadEnvelope  apiPayloadEnvelope `json:"payloadEnvelope"`
+	Visibility       string             `json:"visibility"`
+	Tags             []string           `json:"tags,omitempty"`
+	Attachments      []apiAttachment    `json:"attachments"`
+	CreateTime       *string            `json:"createTime"`
+	Latitude         *float64           `json:"latitude,omitempty"`
+	Longitude        *float64           `json:"longitude,omitempty"`
 }
 
 type updateMemoRequest struct {
-	Content     *string          `json:"content"`
-	Visibility  *string          `json:"visibility"`
-	Tags        *[]string        `json:"tags"`
-	State       *string          `json:"state"`
-	Pinned      *bool            `json:"pinned"`
-	Attachments *[]apiAttachment `json:"attachments"`
-	Latitude    optionalFloat64  `json:"latitude"`
-	Longitude   optionalFloat64  `json:"longitude"`
+	EncryptedPayload *string             `json:"encryptedPayload"`
+	PayloadEnvelope  *apiPayloadEnvelope `json:"payloadEnvelope"`
+	Visibility       *string             `json:"visibility"`
+	Tags             *[]string           `json:"tags"`
+	State            *string             `json:"state"`
+	Pinned           *bool               `json:"pinned"`
+	Attachments      *[]apiAttachment    `json:"attachments"`
+	Latitude         optionalFloat64     `json:"latitude"`
+	Longitude        optionalFloat64     `json:"longitude"`
 }
 
 type apiMemo struct {
-	Name        string          `json:"name"`
-	State       string          `json:"state,omitempty"`
-	Creator     string          `json:"creator,omitempty"`
-	CreateTime  string          `json:"createTime,omitempty"`
-	UpdateTime  string          `json:"updateTime,omitempty"`
-	Content     string          `json:"content,omitempty"`
-	Visibility  string          `json:"visibility,omitempty"`
-	Pinned      bool            `json:"pinned"`
-	Latitude    *float64        `json:"latitude,omitempty"`
-	Longitude   *float64        `json:"longitude,omitempty"`
-	Attachments []apiAttachment `json:"attachments,omitempty"`
-	Tags        []string        `json:"tags,omitempty"`
-	Quote       *apiMemoQuote   `json:"quote,omitempty"`
-}
-
-type apiMemoQuote struct {
-	SourceKind string            `json:"sourceKind"`
-	Source     string            `json:"source"`
-	Memo       *apiMemoQuoteMemo `json:"memo,omitempty"`
-}
-
-type apiMemoQuoteMemo struct {
-	Name        string          `json:"name"`
-	Creator     string          `json:"creator,omitempty"`
-	CreateTime  string          `json:"createTime,omitempty"`
-	UpdateTime  string          `json:"updateTime,omitempty"`
-	Content     string          `json:"content,omitempty"`
-	Visibility  string          `json:"visibility,omitempty"`
-	Attachments []apiAttachment `json:"attachments,omitempty"`
-	Tags        []string        `json:"tags,omitempty"`
+	Name             string              `json:"name"`
+	State            string              `json:"state,omitempty"`
+	Creator          string              `json:"creator,omitempty"`
+	CreateTime       string              `json:"createTime,omitempty"`
+	UpdateTime       string              `json:"updateTime,omitempty"`
+	EncryptedPayload string              `json:"encryptedPayload,omitempty"`
+	PayloadEnvelope  *apiPayloadEnvelope `json:"payloadEnvelope,omitempty"`
+	Visibility       string              `json:"visibility,omitempty"`
+	Pinned           bool                `json:"pinned"`
+	Latitude         *float64            `json:"latitude,omitempty"`
+	Longitude        *float64            `json:"longitude,omitempty"`
+	Attachments      []apiAttachment     `json:"attachments,omitempty"`
+	Tags             []string            `json:"tags,omitempty"`
 }
 
 type listGroupsResponse struct {
@@ -179,23 +181,29 @@ type listGroupMessagesResponse struct {
 }
 
 type createGroupMessageRequest struct {
-	Content string   `json:"content"`
-	Tags    []string `json:"tags,omitempty"`
+	EncryptedPayload string             `json:"encryptedPayload"`
+	PayloadEnvelope  apiPayloadEnvelope `json:"payloadEnvelope"`
+	Tags             []string           `json:"tags,omitempty"`
+	Attachments      []apiAttachment    `json:"attachments,omitempty"`
 }
 
 type updateGroupMessageRequest struct {
-	Content *string   `json:"content"`
-	Tags    *[]string `json:"tags"`
+	EncryptedPayload *string             `json:"encryptedPayload"`
+	PayloadEnvelope  *apiPayloadEnvelope `json:"payloadEnvelope"`
+	Tags             *[]string           `json:"tags"`
+	Attachments      *[]apiAttachment    `json:"attachments"`
 }
 
 type apiGroupMessage struct {
-	Name       string   `json:"name"`
-	Group      string   `json:"group"`
-	Creator    string   `json:"creator"`
-	CreateTime string   `json:"createTime,omitempty"`
-	UpdateTime string   `json:"updateTime,omitempty"`
-	Content    string   `json:"content,omitempty"`
-	Tags       []string `json:"tags,omitempty"`
+	Name             string              `json:"name"`
+	Group            string              `json:"group"`
+	Creator          string              `json:"creator"`
+	CreateTime       string              `json:"createTime,omitempty"`
+	UpdateTime       string              `json:"updateTime,omitempty"`
+	EncryptedPayload string              `json:"encryptedPayload,omitempty"`
+	PayloadEnvelope  *apiPayloadEnvelope `json:"payloadEnvelope,omitempty"`
+	Tags             []string            `json:"tags,omitempty"`
+	Attachments      []apiAttachment     `json:"attachments,omitempty"`
 }
 
 type listGroupTagsResponse struct {
@@ -207,18 +215,26 @@ type addGroupTagRequest struct {
 }
 
 type createAttachmentRequest struct {
-	Filename string  `json:"filename"`
-	Type     string  `json:"type"`
-	Content  string  `json:"content"`
-	Memo     *string `json:"memo"`
+	DescriptorCiphertext    string              `json:"descriptorCiphertext"`
+	DescriptorEnvelope      *apiPayloadEnvelope `json:"descriptorEnvelope"`
+	BlobEncryption          string              `json:"blobEncryption"`
+	ThumbnailBlobEncryption string              `json:"thumbnailBlobEncryption"`
+	Filename                string              `json:"filename"`
+	Type                    string              `json:"type"`
+	Content                 string              `json:"content"`
+	Memo                    *string             `json:"memo"`
 }
 
 type createAttachmentUploadSessionRequest struct {
-	Filename  string                                  `json:"filename"`
-	Type      string                                  `json:"type"`
-	Size      int64                                   `json:"size"`
-	Memo      *string                                 `json:"memo"`
-	Thumbnail *createAttachmentUploadThumbnailRequest `json:"thumbnail"`
+	DescriptorCiphertext    string                                  `json:"descriptorCiphertext"`
+	DescriptorEnvelope      *apiPayloadEnvelope                     `json:"descriptorEnvelope"`
+	BlobEncryption          string                                  `json:"blobEncryption"`
+	ThumbnailBlobEncryption string                                  `json:"thumbnailBlobEncryption"`
+	Filename                string                                  `json:"filename"`
+	Type                    string                                  `json:"type"`
+	Size                    int64                                   `json:"size"`
+	Memo                    *string                                 `json:"memo"`
+	Thumbnail               *createAttachmentUploadThumbnailRequest `json:"thumbnail"`
 }
 
 type createAttachmentUploadThumbnailRequest struct {
@@ -254,17 +270,21 @@ type listAttachmentsResponse struct {
 }
 
 type apiAttachment struct {
-	Name                  string `json:"name"`
-	CreateTime            string `json:"createTime,omitempty"`
-	Filename              string `json:"filename,omitempty"`
-	ExternalLink          string `json:"externalLink,omitempty"`
-	Type                  string `json:"type,omitempty"`
-	Size                  string `json:"size,omitempty"`
-	ThumbnailName         string `json:"thumbnailName,omitempty"`
-	ThumbnailExternalLink string `json:"thumbnailExternalLink,omitempty"`
-	ThumbnailFilename     string `json:"thumbnailFilename,omitempty"`
-	ThumbnailType         string `json:"thumbnailType,omitempty"`
-	Memo                  string `json:"memo,omitempty"`
+	Name                    string              `json:"name"`
+	CreateTime              string              `json:"createTime,omitempty"`
+	DescriptorCiphertext    string              `json:"descriptorCiphertext,omitempty"`
+	BlobEncryption          string              `json:"blobEncryption,omitempty"`
+	ThumbnailBlobEncryption string              `json:"thumbnailBlobEncryption,omitempty"`
+	Filename                string              `json:"filename,omitempty"`
+	ExternalLink            string              `json:"externalLink,omitempty"`
+	Type                    string              `json:"type,omitempty"`
+	Size                    string              `json:"size,omitempty"`
+	DescriptorEnvelope      *apiPayloadEnvelope `json:"descriptorEnvelope,omitempty"`
+	ThumbnailName           string              `json:"thumbnailName,omitempty"`
+	ThumbnailExternalLink   string              `json:"thumbnailExternalLink,omitempty"`
+	ThumbnailFilename       string              `json:"thumbnailFilename,omitempty"`
+	ThumbnailType           string              `json:"thumbnailType,omitempty"`
+	Memo                    string              `json:"memo,omitempty"`
 }
 
 type userSettingResponse struct {
@@ -273,6 +293,74 @@ type userSettingResponse struct {
 
 type generalSetting struct {
 	MemoVisibility string `json:"memoVisibility,omitempty"`
+}
+
+type userEncryptionSettingResponse struct {
+	EncryptionSetting apiUserEncryptionSetting `json:"encryptionSetting"`
+}
+
+type apiRecoveryBundle struct {
+	Version           int    `json:"version"`
+	KDFAlgorithm      string `json:"kdfAlgorithm"`
+	KDFSalt           string `json:"kdfSalt"`
+	KDFIterations     int    `json:"kdfIterations"`
+	WrapAlgorithm     string `json:"wrapAlgorithm"`
+	WrappedAccountKey string `json:"wrappedAccountKey"`
+}
+
+type apiUserEncryptionSetting struct {
+	RecoveryBundle           apiRecoveryBundle `json:"recoveryBundle"`
+	SharingPublicKey         string            `json:"sharingPublicKey,omitempty"`
+	WrappedSharingPrivateKey string            `json:"wrappedSharingPrivateKey,omitempty"`
+	KeyVersion               int               `json:"keyVersion"`
+	Algorithms               string            `json:"algorithms,omitempty"`
+	CreateTime               string            `json:"createTime,omitempty"`
+	UpdateTime               string            `json:"updateTime,omitempty"`
+}
+
+type updateUserEncryptionSettingRequest struct {
+	EncryptionSetting updateUserEncryptionSetting `json:"encryptionSetting"`
+}
+
+type updateUserEncryptionSetting struct {
+	RecoveryBundle           apiRecoveryBundle `json:"recoveryBundle"`
+	SharingPublicKey         string            `json:"sharingPublicKey"`
+	WrappedSharingPrivateKey string            `json:"wrappedSharingPrivateKey"`
+	KeyVersion               int               `json:"keyVersion"`
+	Algorithms               string            `json:"algorithms"`
+}
+
+type listUserPublicKeysResponse struct {
+	Users []apiUserPublicKey `json:"users"`
+}
+
+type apiUserPublicKey struct {
+	Name             string `json:"name"`
+	SharingPublicKey string `json:"sharingPublicKey"`
+	KeyVersion       int    `json:"keyVersion"`
+}
+
+type groupKeyVersionResponse struct {
+	GroupKeyVersion apiGroupKeyVersion `json:"groupKeyVersion"`
+}
+
+type createGroupKeyVersionRequest struct {
+	GroupKeyVersion createGroupKeyVersionBody `json:"groupKeyVersion"`
+}
+
+type createGroupKeyVersionBody struct {
+	Algorithm   string              `json:"algorithm"`
+	WrappedKeys []apiWrappedKeySlot `json:"wrappedKeys"`
+}
+
+type apiGroupKeyVersion struct {
+	Name        string              `json:"name"`
+	Group       string              `json:"group"`
+	Version     int                 `json:"version"`
+	Algorithm   string              `json:"algorithm"`
+	WrappedKeys []apiWrappedKeySlot `json:"wrappedKeys,omitempty"`
+	CreateTime  string              `json:"createTime,omitempty"`
+	UpdateTime  string              `json:"updateTime,omitempty"`
 }
 
 type userStatsResponse struct {

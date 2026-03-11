@@ -18,9 +18,19 @@ func TestAttachmentResumableUploadFlow(t *testing.T) {
 	token := "demo-token"
 
 	createPayload := map[string]any{
-		"filename": "video.mp4",
-		"type":     "video/mp4",
-		"size":     12,
+		"filename":             "video.mp4",
+		"type":                 "video/mp4",
+		"size":                 12,
+		"descriptorCiphertext": "video-descriptor",
+		"descriptorEnvelope": map[string]any{"wrappedKeys": []any{
+			map[string]any{
+				"slotType":      "account_master",
+				"slotRef":       "users/1",
+				"wrapAlgorithm": "AES_GCM_ACCOUNT_MASTER_KEY_V1",
+				"wrappedKey":    "video-wrapped-key",
+			},
+		}},
+		"blobEncryption": "video-blob",
 		"thumbnail": map[string]any{
 			"filename": "video_preview.jpg",
 			"type":     "image/jpeg",
