@@ -143,6 +143,25 @@ type apiMemo struct {
 	Longitude        *float64            `json:"longitude,omitempty"`
 	Attachments      []apiAttachment     `json:"attachments,omitempty"`
 	Tags             []string            `json:"tags,omitempty"`
+	Quote            *apiMemoQuote       `json:"quote,omitempty"`
+}
+
+type apiMemoQuote struct {
+	SourceKind string            `json:"sourceKind"`
+	Source     string            `json:"source"`
+	Memo       *apiMemoQuoteMemo `json:"memo,omitempty"`
+}
+
+type apiMemoQuoteMemo struct {
+	Name             string              `json:"name"`
+	Creator          string              `json:"creator,omitempty"`
+	CreateTime       string              `json:"createTime,omitempty"`
+	UpdateTime       string              `json:"updateTime,omitempty"`
+	EncryptedPayload string              `json:"encryptedPayload,omitempty"`
+	PayloadEnvelope  *apiPayloadEnvelope `json:"payloadEnvelope,omitempty"`
+	Visibility       string              `json:"visibility,omitempty"`
+	Attachments      []apiAttachment     `json:"attachments,omitempty"`
+	Tags             []string            `json:"tags,omitempty"`
 }
 
 type listGroupsResponse struct {

@@ -146,7 +146,52 @@ func toAPIMemo(
 		Longitude:        memo.Memo.Longitude,
 		Attachments:      attachments,
 		Tags:             tags,
+		Quote:            toAPIMemoQuote(memo.Quote, attachmentMapper),
 	}
+}
+
+func toAPIMemoQuote(
+	quote *service.MemoQuote,
+	attachmentMapper func(attachment models.Attachment, memoName string) apiAttachment,
+) *apiMemoQuote {
+	if quote == nil {
+		return nil
+	}
+
+	apiQuote := &apiMemoQuote{
+		SourceKind: string(quote.SourceKind),
+		Source:     quote.Source,
+	}
+	if quote.Memo == nil {
+		return apiQuote
+	}
+
+	attachments := make([]apiAttachment, 0, len(quote.Memo.Attachments))
+	for _, attachment := range quote.Memo.Attachments {
+		if attachmentMapper != nil {
+			attachments = append(attachments, attachmentMapper(attachment, quote.Memo.Memo.Name()))
+			continue
+		}
+		attachments = append(attachments, toAPIAttachment(attachment, quote.Memo.Memo.Name(), "", "", true))
+	}
+
+	tags := quote.Memo.Memo.Payload.Tags
+	if tags == nil {
+		tags = []string{}
+	}
+
+	apiQuote.Memo = &apiMemoQuoteMemo{
+		Name:             quote.Memo.Memo.Name(),
+		Creator:          "users/" + models.Int64ToString(quote.Memo.Memo.CreatorID),
+		CreateTime:       formatTime(quote.Memo.Memo.CreateTime),
+		UpdateTime:       formatTime(quote.Memo.Memo.UpdateTime),
+		EncryptedPayload: quote.Memo.Memo.Content,
+		PayloadEnvelope:  parsePayloadEnvelope(quote.Memo.Memo.PayloadEnvelope),
+		Visibility:       string(quote.Memo.Memo.Visibility),
+		Attachments:      attachments,
+		Tags:             tags,
+	}
+	return apiQuote
 }
 
 func toAPIAttachment(

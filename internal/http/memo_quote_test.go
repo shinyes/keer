@@ -77,7 +77,17 @@ func createMemoWithTagsForQuoteTest(
 	t.Helper()
 
 	createPayload := map[string]any{
-		"content":     content,
+		"encryptedPayload": content,
+		"payloadEnvelope": map[string]any{
+			"wrappedKeys": []any{
+				map[string]any{
+					"slotType":      "account_master",
+					"slotRef":       "users/1",
+					"wrapAlgorithm": "AES_GCM_ACCOUNT_MASTER_KEY_V1",
+					"wrappedKey":    "wrapped-key",
+				},
+			},
+		},
 		"visibility":  "PRIVATE",
 		"attachments": []any{},
 	}

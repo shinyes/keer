@@ -471,7 +471,7 @@ func (s *SQLStore) ListVisibleMemosByIDs(ctx context.Context, viewerID int64, me
 	placeholders := strings.TrimRight(strings.Repeat("?,", len(normalizedIDs)), ",")
 	collaboratorTag := fmt.Sprintf("collab/%d", viewerID)
 	query := fmt.Sprintf(
-		`SELECT m.id, m.creator_id, m.content, m.visibility, m.state, m.pinned, m.create_time, m.update_time, m.display_time, m.latitude, m.longitude, m.has_link, m.has_task_list, m.has_code, m.has_incomplete_tasks
+		`SELECT m.id, m.creator_id, m.content, m.payload_envelope, m.visibility, m.state, m.pinned, m.create_time, m.update_time, m.display_time, m.latitude, m.longitude, m.has_link, m.has_task_list, m.has_code, m.has_incomplete_tasks
 		FROM memos m
 		WHERE m.id IN (%s)
 			AND (
