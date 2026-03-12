@@ -159,6 +159,7 @@ docker run --rm -it \
 - 默认环境变量：
   - `DB_PATH=/data/keer.db`
   - `UPLOADS_DIR=/data/uploads`
+- 运行镜像时必须保证 `/data` 可写；如果你临时使用旧镜像且命名卷权限不匹配，可额外加 `--user root`
 
 ## 运行时控制台命令
 
