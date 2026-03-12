@@ -4,12 +4,10 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Optional image tag, e.g. v2.0.16"
+        description: "Optional image tag, e.g. v3.0.0"
         required: false
         type: string
   push:
-    branches:
-      - main
     tags:
       - "v[0-9]*.[0-9]*.[0-9]*"
       - "v[0-9]*.[0-9]*.[0-9]*-alpha.*"
@@ -40,17 +38,60 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Resolve Release Image Tags
+        id: release_tags
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TAG=""
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            TAG="${GITHUB_REF_NAME}"
+          elif [[ -n "${{ github.event.inputs.release_tag }}" ]]; then
+            TAG="${{ github.event.inputs.release_tag }}"
+          fi
+
+          if [[ -z "${TAG}" ]]; then
+            echo "ref_tag=" >> "${GITHUB_OUTPUT}"
+            echo "version=" >> "${GITHUB_OUTPUT}"
+            echo "major_minor=" >> "${GITHUB_OUTPUT}"
+            echo "major=" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          if [[ ! "${TAG}" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)(-(alpha|beta)\.[0-9]+)?$ ]]; then
+            echo "Unsupported release tag: ${TAG}"
+            exit 1
+          fi
+
+          VERSION="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}${BASH_REMATCH[4]}"
+          echo "ref_tag=${TAG}" >> "${GITHUB_OUTPUT}"
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+
+          if [[ -z "${BASH_REMATCH[4]}" ]]; then
+            echo "major_minor=${BASH_REMATCH[1]}.${BASH_REMATCH[2]}" >> "${GITHUB_OUTPUT}"
+            if [[ "${BASH_REMATCH[1]}" != "0" ]]; then
+              echo "major=${BASH_REMATCH[1]}" >> "${GITHUB_OUTPUT}"
+            else
+              echo "major=" >> "${GITHUB_OUTPUT}"
+            fi
+          else
+            echo "major_minor=" >> "${GITHUB_OUTPUT}"
+            echo "major=" >> "${GITHUB_OUTPUT}"
+          fi
+
       - name: Generate Docker Metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository_owner }}/keer-backend
           tags: |
-            type=ref,event=branch
             type=ref,event=tag
+            type=raw,value=${{ steps.release_tags.outputs.ref_tag }},enable=${{ steps.release_tags.outputs.ref_tag != '' && github.ref_type != 'tag' }}
+            type=raw,value=${{ steps.release_tags.outputs.version }},enable=${{ steps.release_tags.outputs.version != '' }}
+            type=raw,value=${{ steps.release_tags.outputs.major_minor }},enable=${{ steps.release_tags.outputs.major_minor != '' }}
+            type=raw,value=${{ steps.release_tags.outputs.major }},enable=${{ steps.release_tags.outputs.major != '' }}
             type=sha
-            type=raw,value=${{ github.event.inputs.release_tag }},enable=${{ github.event.inputs.release_tag != '' }}
-            type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build And Push
         uses: docker/build-push-action@v6

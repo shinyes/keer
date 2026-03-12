@@ -1,5 +1,10 @@
 # syntax=docker/dockerfile:1.7
 
+ARG BUILDPLATFORM
+ARG TARGETPLATFORM
+ARG TARGETOS
+ARG TARGETARCH
+
 FROM --platform=$BUILDPLATFORM golang:1.25.5-bookworm AS build
 
 WORKDIR /src
@@ -8,13 +13,14 @@ RUN go mod download
 
 COPY . .
 
-ARG TARGETOS=linux
-ARG TARGETARCH=amd64
+ARG TARGETPLATFORM
+ARG TARGETOS
+ARG TARGETARCH
 
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags="-s -w" -o /out/keer ./cmd/server
 
-FROM gcr.io/distroless/base-debian12:nonroot
+FROM --platform=$TARGETPLATFORM gcr.io/distroless/base-debian12:nonroot
 
 WORKDIR /app
 

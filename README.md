@@ -199,12 +199,14 @@ exit
 
 - 触发条件：
   - `workflow_dispatch`
-  - 推送 `main`
   - 推送标签 `v*`
 - 行为：
   - 使用仓库根目录 `Dockerfile`
   - 构建 `linux/amd64` 与 `linux/arm64`
   - 推送到 `ghcr.io/<owner>/keer-backend`
+  - 发布 tag 推送会额外生成版本镜像标签：
+    - 稳定版：`:v3.0.0`、`:3.0.0`、`:3.0`、`:3`
+    - 预发布：`:v3.0.0-beta.1`、`:3.0.0-beta.1`
 
 如果你准备直接启用镜像发布，需要确保仓库对 GitHub Container Registry 有 `packages: write` 权限。
 
@@ -227,6 +229,8 @@ exit
 - Android 会发布 APK 到 GitHub Release
 - Backend 会发布多平台二进制到 GitHub Release
 - Backend 会同步推送 Docker 镜像到 `ghcr.io/<owner>/keer-backend`
+- 当 tag 为 `v3.0.0` 时，Docker 镜像至少会带上 `:v3.0.0` 和 `:3.0.0`
+- Backend 不再发布 `:main` 或 `:latest`
 
 ## 鉴权与登录
 
@@ -313,9 +317,11 @@ go vet ./...
 ## Docker Image Release
 
 - Backend Docker image is built from [`Dockerfile`](./Dockerfile).
-- GitHub Actions workflow: `.github/workflows/release-backend-docker.yml`
-- Publish target: `ghcr.io/<owner>/<repo>:<version>` and `:latest` for stable versions.
+- GitHub Actions workflow: `.github/workflows/docker-publish.yml`
+- Publish target: `ghcr.io/<owner>/keer-backend`
+- Stable tag release publishes `:vX.Y.Z`, `:X.Y.Z`, `:X.Y`, and `:X`
+- Prerelease tag release publishes `:vX.Y.Z-beta.N` or `:vX.Y.Z-alpha.N`, plus the stripped `:X.Y.Z-beta.N` / `:X.Y.Z-alpha.N`
 - Trigger mode (push tag):
-  - `1.2.3`
-  - `1.2.3-alpha.1`
-  - `1.2.3-beta.1`
+  - `v3.0.0`
+  - `v3.0.0-alpha.1`
+  - `v3.0.0-beta.1`
