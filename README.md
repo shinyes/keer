@@ -117,7 +117,7 @@ go run ./cmd/server
 ### 本地构建镜像
 
 ```bash
-docker build -t keer-backend:local .
+docker build -t keer:local .
 ```
 
 ### 运行本地文件存储模式
@@ -131,7 +131,7 @@ docker run --rm -it \
   -e BOOTSTRAP_USER=demo \
   -e BOOTSTRAP_TOKEN=demo-token \
   -v keer-data:/data \
-  keer-backend:local
+  keer:local
 ```
 
 ### 运行 S3 模式
@@ -149,7 +149,7 @@ docker run --rm -it \
   -e S3_USE_PATH_STYLE=true \
   -e JWT_SECRET=replace-with-a-long-random-secret \
   -v keer-data:/data \
-  keer-backend:local
+  keer:local
 ```
 
 镜像默认：
@@ -203,7 +203,7 @@ exit
 - 行为：
   - 使用仓库根目录 `Dockerfile`
   - 构建 `linux/amd64` 与 `linux/arm64`
-  - 推送到 `ghcr.io/<owner>/keer-backend`
+  - 推送到 `ghcr.io/<owner>/keer`
   - 发布 tag 推送会额外生成版本镜像标签：
     - 稳定版：`:v3.0.0`、`:3.0.0`、`:3.0`、`:3`
     - 预发布：`:v3.0.0-beta.1`、`:3.0.0-beta.1`
@@ -228,7 +228,7 @@ exit
 
 - Android 会发布 APK 到 GitHub Release
 - Backend 会发布多平台二进制到 GitHub Release
-- Backend 会同步推送 Docker 镜像到 `ghcr.io/<owner>/keer-backend`
+- Backend 会同步推送 Docker 镜像到 `ghcr.io/<owner>/keer`
 - 当 tag 为 `v3.0.0` 时，Docker 镜像至少会带上 `:v3.0.0` 和 `:3.0.0`
 - Backend 不再发布 `:main` 或 `:latest`
 
@@ -318,7 +318,7 @@ go vet ./...
 
 - Backend Docker image is built from [`Dockerfile`](./Dockerfile).
 - GitHub Actions workflow: `.github/workflows/docker-publish.yml`
-- Publish target: `ghcr.io/<owner>/keer-backend`
+- Publish target: `ghcr.io/<owner>/keer`
 - Stable tag release publishes `:vX.Y.Z`, `:X.Y.Z`, `:X.Y`, and `:X`
 - Prerelease tag release publishes `:vX.Y.Z-beta.N` or `:vX.Y.Z-alpha.N`, plus the stripped `:X.Y.Z-beta.N` / `:X.Y.Z-alpha.N`
 - Trigger mode (push tag):
