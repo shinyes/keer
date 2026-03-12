@@ -284,10 +284,7 @@ func registerGroupRoutes(
 		}
 		version, recipients, err := groupService.GetCurrentGroupKeyVersion(c.Context(), currentUser.ID, groupID)
 		if err != nil {
-			if mapped := mapNoRowsToNotFound(c, err, "group key version not found"); mapped != nil {
-				return mapped
-			}
-			return internalError(c, err)
+			return mapGroupMessageMutationError(c, err, "group key version not found", false)
 		}
 		return c.JSON(groupKeyVersionResponse{
 			GroupKeyVersion: toAPIGroupKeyVersion(version, recipients),
