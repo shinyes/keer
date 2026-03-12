@@ -329,10 +329,10 @@ type apiRecoveryBundle struct {
 
 type apiUserEncryptionSetting struct {
 	RecoveryBundle           apiRecoveryBundle `json:"recoveryBundle"`
-	SharingPublicKey         string            `json:"sharingPublicKey,omitempty"`
-	WrappedSharingPrivateKey string            `json:"wrappedSharingPrivateKey,omitempty"`
+	SharingPublicKey         string            `json:"sharingPublicKey"`
+	WrappedSharingPrivateKey string            `json:"wrappedSharingPrivateKey"`
 	KeyVersion               int               `json:"keyVersion"`
-	Algorithms               string            `json:"algorithms,omitempty"`
+	Algorithms               string            `json:"algorithms"`
 	CreateTime               string            `json:"createTime,omitempty"`
 	UpdateTime               string            `json:"updateTime,omitempty"`
 }
