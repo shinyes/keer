@@ -96,7 +96,7 @@ func (s *SQLStore) GetUserByRefreshToken(ctx context.Context, rawToken string) (
 	err := s.db.QueryRowContext(
 		ctx,
 		`SELECT
-			u.id, u.username, u.display_name, u.avatar_url, u.password_hash, u.role, u.default_visibility, u.create_time, u.update_time,
+			u.id, u.username, u.avatar_url, u.password_hash, u.role, u.default_visibility, u.create_time, u.update_time,
 			t.id, t.user_id, t.token_prefix, t.token_hash, t.created_at, t.last_used_at, t.expires_at, t.revoked_at
 		FROM refresh_tokens t
 		JOIN users u ON u.id = t.user_id
@@ -108,7 +108,6 @@ func (s *SQLStore) GetUserByRefreshToken(ctx context.Context, rawToken string) (
 	).Scan(
 		&user.ID,
 		&user.Username,
-		&user.DisplayName,
 		&user.AvatarURL,
 		&user.PasswordHash,
 		&user.Role,

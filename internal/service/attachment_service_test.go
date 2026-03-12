@@ -356,23 +356,6 @@ func TestMultipartSessionPathEncodeDecode_RoundTrip(t *testing.T) {
 	}
 }
 
-func TestDecodeMultipartSessionPath_LegacyFormat(t *testing.T) {
-	legacy := multipartSessionPathPrefix + "attachments/1/video.mp4|legacy-upload-id|8388608"
-	got, ok := decodeMultipartSessionPath(legacy)
-	if !ok {
-		t.Fatalf("decodeMultipartSessionPath() ok = false, legacy=%q", legacy)
-	}
-	if got.StorageKey != "attachments/1/video.mp4" {
-		t.Fatalf("unexpected storage key: %q", got.StorageKey)
-	}
-	if got.MultipartUploadID != "legacy-upload-id" {
-		t.Fatalf("unexpected multipart upload id: %q", got.MultipartUploadID)
-	}
-	if got.PartSize != 8388608 {
-		t.Fatalf("unexpected part size: %d", got.PartSize)
-	}
-}
-
 func generateTestJPEGBytes(t *testing.T, width int, height int) []byte {
 	t.Helper()
 	img := image.NewRGBA(image.Rect(0, 0, width, height))

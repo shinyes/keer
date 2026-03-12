@@ -5,7 +5,6 @@ Keer 是一个使用 Go 开发的轻量级后端服务，提供用户、Memo、�
 ## 现在的配置原则
 
 - 服务启动只依赖环境变量，不再从数据库读取 S3 配置
-- 旧的 `storage_backend` / `storage_s3_*` 数据库设置在启动时会被清理
 - `local` 与 `s3` 两种存储模式都通过环境变量切换
 
 ## 功能概览
@@ -188,12 +187,12 @@ docker compose down
 - 默认环境变量：
   - `DB_PATH=/data/keer.db`
   - `UPLOADS_DIR=/data/uploads`
-- 运行镜像时必须保证 `/data` 可写；如果你临时使用旧镜像且命名卷权限不匹配，可额外加 `--user root`
+- 运行镜像时必须保证 `/data` 可写
 
 ## 运行时控制台命令
 
 ```text
-user create <username> <password> [display_name] [role]
+user create <username> <password> [role]
 token create <username_or_id> [description] [--ttl 7d|24h]
 token list <username_or_id> [--all]
 token revoke <token_id>

@@ -74,7 +74,7 @@ func TestUpdateUserAvatarThumbnail_StoresAvatarToDedicatedPath(t *testing.T) {
 	userService.SetAvatarStorage(avatarStore)
 	ctx := context.Background()
 
-	user, err := services.store.CreateUser(ctx, "avatarcase01", "avatarcase01", "USER")
+	user, err := services.store.CreateUser(ctx, "avatarcase01", "USER")
 	if err != nil {
 		t.Fatalf("CreateUser() error = %v", err)
 	}
@@ -102,7 +102,7 @@ func TestUpdateUserAvatarThumbnail_WriteFailureDoesNotUpdateAvatarURL(t *testing
 	userService.SetAvatarStorage(avatarStore)
 	ctx := context.Background()
 
-	user, err := services.store.CreateUser(ctx, "avatarcase02", "avatarcase02", "USER")
+	user, err := services.store.CreateUser(ctx, "avatarcase02", "USER")
 	if err != nil {
 		t.Fatalf("CreateUser() error = %v", err)
 	}
@@ -128,7 +128,7 @@ func TestUpdateUserAvatarThumbnail_RejectsLargeDimensions(t *testing.T) {
 	userService.SetAvatarStorage(avatarStore)
 	ctx := context.Background()
 
-	user, err := services.store.CreateUser(ctx, "avatarcase03", "avatarcase03", "USER")
+	user, err := services.store.CreateUser(ctx, "avatarcase03", "USER")
 	if err != nil {
 		t.Fatalf("CreateUser() error = %v", err)
 	}
@@ -149,7 +149,7 @@ func TestClearUserAvatar_DeleteFailureDoesNotUpdateAvatarURL(t *testing.T) {
 	userService.SetAvatarStorage(avatarStore)
 	ctx := context.Background()
 
-	user, err := services.store.CreateUser(ctx, "avatarcase04", "avatarcase04", "USER")
+	user, err := services.store.CreateUser(ctx, "avatarcase04", "USER")
 	if err != nil {
 		t.Fatalf("CreateUser() error = %v", err)
 	}

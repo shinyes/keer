@@ -10,7 +10,6 @@ func Migrate(db *sql.DB) error {
 		`CREATE TABLE IF NOT EXISTS users (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			username TEXT NOT NULL UNIQUE COLLATE NOCASE,
-			display_name TEXT NOT NULL,
 			avatar_url TEXT NOT NULL DEFAULT '',
 			email TEXT NOT NULL DEFAULT '',
 			password_hash TEXT NOT NULL DEFAULT '',
@@ -529,38 +528,6 @@ func Migrate(db *sql.DB) error {
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_memos_has_incomplete_tasks ON memos(has_incomplete_tasks)`); err != nil {
 		return fmt.Errorf("migration failed: %w", err)
 	}
-	hasPayloadJSON, err := hasColumn(db, "memos", "payload_json")
-	if err != nil {
-		return fmt.Errorf("migration failed: %w", err)
-	}
-	if hasPayloadJSON {
-		if _, err := db.Exec(`
-			UPDATE memos
-			SET
-				has_link = CASE
-					WHEN json_valid(payload_json) THEN COALESCE(CAST(JSON_EXTRACT(payload_json, '$.property.hasLink') AS INTEGER), 0)
-					ELSE 0
-				END,
-				has_task_list = CASE
-					WHEN json_valid(payload_json) THEN COALESCE(CAST(JSON_EXTRACT(payload_json, '$.property.hasTaskList') AS INTEGER), 0)
-					ELSE 0
-				END,
-				has_code = CASE
-					WHEN json_valid(payload_json) THEN COALESCE(CAST(JSON_EXTRACT(payload_json, '$.property.hasCode') AS INTEGER), 0)
-					ELSE 0
-				END,
-				has_incomplete_tasks = CASE
-					WHEN json_valid(payload_json) THEN COALESCE(CAST(JSON_EXTRACT(payload_json, '$.property.hasIncompleteTasks') AS INTEGER), 0)
-					ELSE 0
-				END
-		`); err != nil {
-			return fmt.Errorf("migration failed: %w", err)
-		}
-		if err := removeMemoPayloadJSONColumn(db); err != nil {
-			return fmt.Errorf("migration failed: %w", err)
-		}
-	}
-
 	return nil
 }
 
@@ -574,22 +541,6 @@ func ensureColumn(db *sql.DB, table string, column string, definition string) er
 	}
 	_, err = db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, definition))
 	return err
-}
-
-func removeMemoPayloadJSONColumn(db *sql.DB) error {
-	exists, err := hasColumn(db, "memos", "payload_json")
-	if err != nil {
-		return err
-	}
-	if !exists {
-		return nil
-	}
-
-	// On older SQLite variants, DROP COLUMN may be unsupported.
-	// Keep the legacy column in place to avoid destructive table rebuilds
-	// that can break under active foreign key constraints.
-	_, _ = db.Exec("ALTER TABLE memos DROP COLUMN payload_json")
-	return nil
 }
 
 func hasColumn(db *sql.DB, table string, column string) (bool, error) {

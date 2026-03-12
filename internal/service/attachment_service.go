@@ -1151,8 +1151,7 @@ func decodeMultipartSessionPath(tempPath string) (multipartSessionInfo, bool) {
 	if decoded, ok := decodeMultipartSessionPathEncoded(payload); ok {
 		return decoded, true
 	}
-
-	return decodeMultipartSessionPathLegacy(payload)
+	return multipartSessionInfo{}, false
 }
 
 func decodeMultipartSessionPathEncoded(payload string) (multipartSessionInfo, bool) {
@@ -1170,27 +1169,6 @@ func decodeMultipartSessionPathEncoded(payload string) (multipartSessionInfo, bo
 	}
 	storageKey := strings.TrimSpace(string(storageKeyBytes))
 	multipartUploadID := strings.TrimSpace(string(multipartUploadIDBytes))
-	partSize, err := strconv.ParseInt(strings.TrimSpace(parts[2]), 10, 64)
-	if err != nil || partSize <= 0 {
-		return multipartSessionInfo{}, false
-	}
-	if storageKey == "" || multipartUploadID == "" {
-		return multipartSessionInfo{}, false
-	}
-	return multipartSessionInfo{
-		StorageKey:        storageKey,
-		MultipartUploadID: multipartUploadID,
-		PartSize:          partSize,
-	}, true
-}
-
-func decodeMultipartSessionPathLegacy(payload string) (multipartSessionInfo, bool) {
-	parts := strings.Split(payload, "|")
-	if len(parts) != 3 {
-		return multipartSessionInfo{}, false
-	}
-	storageKey := strings.TrimSpace(parts[0])
-	multipartUploadID := strings.TrimSpace(parts[1])
 	partSize, err := strconv.ParseInt(strings.TrimSpace(parts[2]), 10, 64)
 	if err != nil || partSize <= 0 {
 		return multipartSessionInfo{}, false

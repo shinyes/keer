@@ -217,7 +217,7 @@ func (s *SQLStore) ListGroupsByUser(ctx context.Context, userID int64) ([]models
 func (s *SQLStore) ListGroupMembers(ctx context.Context, groupID int64) ([]models.User, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT u.id, u.username, u.display_name, u.avatar_url, u.password_hash, u.role, u.default_visibility, u.create_time, u.update_time
+		`SELECT u.id, u.username, u.avatar_url, u.password_hash, u.role, u.default_visibility, u.create_time, u.update_time
 		FROM group_members gm
 		JOIN users u ON u.id = gm.user_id
 		WHERE gm.group_id = ?
@@ -238,7 +238,6 @@ func (s *SQLStore) ListGroupMembers(ctx context.Context, groupID int64) ([]model
 		if err := rows.Scan(
 			&user.ID,
 			&user.Username,
-			&user.DisplayName,
 			&user.AvatarURL,
 			&user.PasswordHash,
 			&user.Role,

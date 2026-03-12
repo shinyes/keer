@@ -39,10 +39,6 @@ func Build(ctx context.Context, cfg config.Config) (*Container, func() error, er
 	}
 
 	sqlStore := store.New(sqliteDB)
-	if err := purgeLegacyStorageSettings(ctx, sqlStore); err != nil {
-		_ = cleanup()
-		return nil, nil, fmt.Errorf("purge legacy storage settings: %w", err)
-	}
 	userService := service.NewUserService(sqlStore)
 	userService.ConfigureAuth(cfg.JWTSecret, cfg.AccessTokenTTL, cfg.RefreshTokenTTL)
 
@@ -84,21 +80,4 @@ func Build(ctx context.Context, cfg config.Config) (*Container, func() error, er
 		AttachmentService: attachmentService,
 		Router:            router,
 	}, cleanup, nil
-}
-
-func purgeLegacyStorageSettings(ctx context.Context, sqlStore *store.SQLStore) error {
-	for _, key := range []string{
-		"storage_backend",
-		"storage_s3_endpoint",
-		"storage_s3_region",
-		"storage_s3_bucket",
-		"storage_s3_access_key_id",
-		"storage_s3_access_key_secret",
-		"storage_s3_use_path_style",
-	} {
-		if err := sqlStore.DeleteSetting(ctx, key); err != nil {
-			return err
-		}
-	}
-	return nil
 }

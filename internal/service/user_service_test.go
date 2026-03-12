@@ -15,9 +15,8 @@ func TestCreateUser_FirstUserIsAdmin(t *testing.T) {
 	ctx := context.Background()
 
 	user, err := userService.CreateUser(ctx, nil, CreateUserInput{
-		Username:    "alice01",
-		DisplayName: "Alice",
-		Password:    "pass-123",
+		Username: "alice01",
+		Password: "pass-123",
 	}, false)
 	if err != nil {
 		t.Fatalf("CreateUser() error = %v", err)
@@ -84,7 +83,6 @@ func TestCreateUser_ValidateOnlyDoesNotPersist(t *testing.T) {
 
 	user, err := userService.CreateUser(ctx, nil, CreateUserInput{
 		Username:     "preview01",
-		DisplayName:  "Preview",
 		Password:     "pass-123",
 		ValidateOnly: true,
 	}, true)

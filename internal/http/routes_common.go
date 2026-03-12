@@ -30,14 +30,13 @@ func toAPIUser(user models.User) apiUser {
 		name = user.Name()
 	}
 	return apiUser{
-		Name:        name,
-		Role:        role,
-		Username:    user.Username,
-		DisplayName: user.DisplayName,
-		AvatarURL:   user.AvatarURL,
-		State:       "NORMAL",
-		CreateTime:  formatMaybeTime(user.CreateTime),
-		UpdateTime:  formatMaybeTime(user.UpdateTime),
+		Name:       name,
+		Role:       role,
+		Username:   user.Username,
+		AvatarURL:  user.AvatarURL,
+		State:      "NORMAL",
+		CreateTime: formatMaybeTime(user.CreateTime),
+		UpdateTime: formatMaybeTime(user.UpdateTime),
 	}
 }
 
@@ -47,11 +46,10 @@ func toAPIUserSync(user models.User) apiUser {
 		name = user.Name()
 	}
 	return apiUser{
-		Name:        name,
-		Username:    user.Username,
-		DisplayName: user.DisplayName,
-		AvatarURL:   user.AvatarURL,
-		UpdateTime:  formatMaybeTime(user.UpdateTime),
+		Name:       name,
+		Username:   user.Username,
+		AvatarURL:  user.AvatarURL,
+		UpdateTime: formatMaybeTime(user.UpdateTime),
 	}
 }
 
@@ -80,9 +78,8 @@ func toAPIGroup(group service.GroupWithMembers) apiGroup {
 	members := make([]apiGroupMember, 0, len(group.Members))
 	for _, member := range group.Members {
 		members = append(members, apiGroupMember{
-			Name:        member.Name(),
-			Username:    member.Username,
-			DisplayName: member.DisplayName,
+			Name:     member.Name(),
+			Username: member.Username,
 		})
 	}
 	return apiGroup{

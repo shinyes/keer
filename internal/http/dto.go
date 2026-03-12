@@ -56,7 +56,6 @@ type createUserBody struct {
 	Name        string `json:"name"`
 	Role        string `json:"role"`
 	Username    string `json:"username"`
-	DisplayName string `json:"displayName"`
 	AvatarURL   string `json:"avatarUrl"`
 	Description string `json:"description"`
 	Password    string `json:"password"`
@@ -67,7 +66,6 @@ type apiUser struct {
 	Name        string `json:"name"`
 	Role        string `json:"role,omitempty"`
 	Username    string `json:"username"`
-	DisplayName string `json:"displayName,omitempty"`
 	AvatarURL   string `json:"avatarUrl,omitempty"`
 	Description string `json:"description,omitempty"`
 	State       string `json:"state,omitempty"`
@@ -191,9 +189,8 @@ type createDirectGroupRequest struct {
 }
 
 type apiGroupMember struct {
-	Name        string `json:"name"`
-	Username    string `json:"username"`
-	DisplayName string `json:"displayName,omitempty"`
+	Name     string `json:"name"`
+	Username string `json:"username"`
 }
 
 type apiGroup struct {

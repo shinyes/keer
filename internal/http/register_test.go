@@ -28,9 +28,8 @@ func TestCreateUserEndpoint_FirstUserAdmin(t *testing.T) {
 
 	body := map[string]any{
 		"user": map[string]any{
-			"username":    "register01",
-			"displayName": "Register User",
-			"password":    "register-password",
+			"username": "register01",
+			"password": "register-password",
 		},
 	}
 	payload, _ := json.Marshal(body)
@@ -465,7 +464,7 @@ func newTestAppWithUserService(t *testing.T, allowRegistration bool, withAuthFix
 }
 
 func seedTestAuthFixture(ctx context.Context, sqlStore *store.SQLStore) (string, error) {
-	user, err := sqlStore.CreateUser(ctx, "demo", "demo", "HOST")
+	user, err := sqlStore.CreateUser(ctx, "demo", "HOST")
 	if err != nil {
 		return "", err
 	}

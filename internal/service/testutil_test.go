@@ -37,7 +37,7 @@ func setupTestServices(t *testing.T) testServices {
 
 func mustCreateUser(t *testing.T, s *store.SQLStore, username string) models.User {
 	t.Helper()
-	user, err := s.CreateUser(context.Background(), username, username, "USER")
+	user, err := s.CreateUser(context.Background(), username, "USER")
 	if err != nil {
 		t.Fatalf("CreateUser() error = %v", err)
 	}

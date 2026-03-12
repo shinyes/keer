@@ -9,18 +9,17 @@ import (
 	"github.com/shinyes/keer/internal/models"
 )
 
-func (s *SQLStore) CreateUser(ctx context.Context, username string, displayName string, role string) (models.User, error) {
-	return s.CreateUserWithProfile(ctx, username, displayName, "", role)
+func (s *SQLStore) CreateUser(ctx context.Context, username string, role string) (models.User, error) {
+	return s.CreateUserWithProfile(ctx, username, "", role)
 }
 
-func (s *SQLStore) CreateUserWithProfile(ctx context.Context, username string, displayName string, passwordHash string, role string) (models.User, error) {
+func (s *SQLStore) CreateUserWithProfile(ctx context.Context, username string, passwordHash string, role string) (models.User, error) {
 	now := time.Now().UTC()
 	res, err := s.db.ExecContext(
 		ctx,
-		`INSERT INTO users (username, display_name, avatar_url, password_hash, role, default_visibility, create_time, update_time)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO users (username, avatar_url, password_hash, role, default_visibility, create_time, update_time)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		username,
-		displayName,
 		"",
 		passwordHash,
 		role,
@@ -45,14 +44,13 @@ func (s *SQLStore) GetUserByID(ctx context.Context, id int64) (models.User, erro
 	var updateTime string
 	err := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, username, display_name, avatar_url, password_hash, role, default_visibility, create_time, update_time
+		`SELECT id, username, avatar_url, password_hash, role, default_visibility, create_time, update_time
 		FROM users
 		WHERE id = ?`,
 		id,
 	).Scan(
 		&user.ID,
 		&user.Username,
-		&user.DisplayName,
 		&user.AvatarURL,
 		&user.PasswordHash,
 		&user.Role,
@@ -82,14 +80,13 @@ func (s *SQLStore) GetUserByUsername(ctx context.Context, username string) (mode
 	var updateTime string
 	err := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, username, display_name, avatar_url, password_hash, role, default_visibility, create_time, update_time
+		`SELECT id, username, avatar_url, password_hash, role, default_visibility, create_time, update_time
 		FROM users
 		WHERE username = ? COLLATE NOCASE`,
 		username,
 	).Scan(
 		&user.ID,
 		&user.Username,
-		&user.DisplayName,
 		&user.AvatarURL,
 		&user.PasswordHash,
 		&user.Role,
@@ -169,7 +166,7 @@ func (s *SQLStore) ListUsersByIdentifiersUpdatedWithin(
 		return []models.User{}, nil
 	}
 
-	query := `SELECT id, username, display_name, avatar_url, password_hash, role, default_visibility, create_time, update_time
+	query := `SELECT id, username, avatar_url, password_hash, role, default_visibility, create_time, update_time
 		FROM users
 		WHERE (`
 	args := make([]any, 0, len(userIDs)+len(usernames)+2)
@@ -213,7 +210,6 @@ func (s *SQLStore) ListUsersByIdentifiersUpdatedWithin(
 		if err := rows.Scan(
 			&user.ID,
 			&user.Username,
-			&user.DisplayName,
 			&user.AvatarURL,
 			&user.PasswordHash,
 			&user.Role,
@@ -416,7 +412,7 @@ func (s *SQLStore) GetUserByToken(ctx context.Context, rawToken string) (models.
 	err := s.db.QueryRowContext(
 		ctx,
 		`SELECT
-			u.id, u.username, u.display_name, u.avatar_url, u.password_hash, u.role, u.default_visibility, u.create_time, u.update_time,
+			u.id, u.username, u.avatar_url, u.password_hash, u.role, u.default_visibility, u.create_time, u.update_time,
 			t.id, t.user_id, t.token_prefix, t.token_hash, t.description, t.created_at, t.last_used_at, t.expires_at, t.revoked_at
 		FROM personal_access_tokens t
 		JOIN users u ON u.id = t.user_id
@@ -428,7 +424,6 @@ func (s *SQLStore) GetUserByToken(ctx context.Context, rawToken string) (models.
 	).Scan(
 		&user.ID,
 		&user.Username,
-		&user.DisplayName,
 		&user.AvatarURL,
 		&user.PasswordHash,
 		&user.Role,

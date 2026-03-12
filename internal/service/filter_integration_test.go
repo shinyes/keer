@@ -9,7 +9,7 @@ import (
 	"github.com/shinyes/keer/internal/store"
 )
 
-func TestListMemos_TagInHierarchical(t *testing.T) {
+func TestListMemos_TagMembership(t *testing.T) {
 	services := setupTestServices(t)
 	ctx := context.Background()
 	user := mustCreateUser(t, services.store, "u1")
@@ -36,20 +36,20 @@ func TestListMemos_TagInHierarchical(t *testing.T) {
 		t.Fatalf("CreateMemo #work error = %v", err)
 	}
 
-	list, _, err := services.memoService.ListMemos(ctx, user.ID, nil, `tag in ["book"]`, 200, "")
+	list, _, err := services.memoService.ListMemos(ctx, user.ID, nil, `"book" in tags`, 200, "")
 	if err != nil {
-		t.Fatalf("ListMemos tag in [book] error = %v", err)
+		t.Fatalf(`ListMemos "book" in tags error = %v`, err)
 	}
-	if len(list) != 2 {
-		t.Fatalf("expected 2 memos for tag in [book], got %d", len(list))
+	if len(list) != 1 {
+		t.Fatalf(`expected 1 memo for "book" in tags, got %d`, len(list))
 	}
 
-	list, _, err = services.memoService.ListMemos(ctx, user.ID, nil, `tag in ["book","work"]`, 200, "")
+	list, _, err = services.memoService.ListMemos(ctx, user.ID, nil, `"book" in tags || "work" in tags`, 200, "")
 	if err != nil {
-		t.Fatalf("ListMemos tag in [book,work] error = %v", err)
+		t.Fatalf(`ListMemos "book" in tags || "work" in tags error = %v`, err)
 	}
-	if len(list) != 3 {
-		t.Fatalf("expected 3 memos for tag in [book,work], got %d", len(list))
+	if len(list) != 2 {
+		t.Fatalf(`expected 2 memos for "book" in tags || "work" in tags, got %d`, len(list))
 	}
 }
 
@@ -129,15 +129,7 @@ func TestListMemos_ContentKeywordInsideTagLiteralIsAllowed(t *testing.T) {
 		t.Fatalf("CreateMemo content-tag error = %v", err)
 	}
 
-	list, _, err := services.memoService.ListMemos(ctx, user.ID, nil, `tag in ["content"]`, 200, "")
-	if err != nil {
-		t.Fatalf("ListMemos tag in [content] error = %v", err)
-	}
-	if len(list) != 1 {
-		t.Fatalf("expected 1 memo for tag in [content], got %d", len(list))
-	}
-
-	list, _, err = services.memoService.ListMemos(ctx, user.ID, nil, `"content" in tags`, 200, "")
+	list, _, err := services.memoService.ListMemos(ctx, user.ID, nil, `"content" in tags`, 200, "")
 	if err != nil {
 		t.Fatalf(`ListMemos "content" in tags error = %v`, err)
 	}

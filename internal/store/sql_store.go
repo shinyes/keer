@@ -86,7 +86,7 @@ func scanMemo(scanner interface {
 	var pinned int
 	var createTime string
 	var updateTime string
-	var legacySortTime string
+	var displayTime string
 	var latitude sql.NullFloat64
 	var longitude sql.NullFloat64
 	var hasLink int
@@ -103,7 +103,7 @@ func scanMemo(scanner interface {
 		&pinned,
 		&createTime,
 		&updateTime,
-		&legacySortTime,
+		&displayTime,
 		&latitude,
 		&longitude,
 		&hasLink,
@@ -126,7 +126,7 @@ func scanMemo(scanner interface {
 	if err != nil {
 		return models.Memo{}, err
 	}
-	if _, err = parseTime(legacySortTime); err != nil {
+	if _, err = parseTime(displayTime); err != nil {
 		return models.Memo{}, err
 	}
 	if latitude.Valid {

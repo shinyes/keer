@@ -69,14 +69,14 @@ func (s *SQLStore) AreFriends(ctx context.Context, userID int64, friendID int64)
 func (s *SQLStore) ListFriends(ctx context.Context, userID int64) ([]models.User, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT u.id, u.username, u.display_name, u.avatar_url, u.password_hash, u.role, u.default_visibility, u.create_time, u.update_time
+		`SELECT u.id, u.username, u.avatar_url, u.password_hash, u.role, u.default_visibility, u.create_time, u.update_time
 		FROM friendships f
 		JOIN users u ON u.id = CASE
 			WHEN f.user_id = ? THEN f.friend_id
 			ELSE f.user_id
 		END
 		WHERE f.user_id = ? OR f.friend_id = ?
-		ORDER BY LOWER(u.display_name) ASC, LOWER(u.username) ASC, u.id ASC`,
+		ORDER BY LOWER(u.username) ASC, u.id ASC`,
 		userID,
 		userID,
 		userID,
@@ -95,7 +95,6 @@ func (s *SQLStore) ListFriends(ctx context.Context, userID int64) ([]models.User
 		if err := rows.Scan(
 			&user.ID,
 			&user.Username,
-			&user.DisplayName,
 			&user.AvatarURL,
 			&user.PasswordHash,
 			&user.Role,

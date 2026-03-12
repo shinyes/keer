@@ -145,7 +145,6 @@ func NewRouter(
 
 		user, err := userService.CreateUser(c.Context(), creator, service.CreateUserInput{
 			Username:     req.User.Username,
-			DisplayName:  req.User.DisplayName,
 			Password:     req.User.Password,
 			Role:         req.User.Role,
 			ValidateOnly: req.ValidateOnly,
@@ -154,8 +153,6 @@ func NewRouter(
 			switch {
 			case errors.Is(err, service.ErrInvalidUsername):
 				return badRequest(c, "invalid username")
-			case errors.Is(err, service.ErrInvalidDisplayName):
-				return badRequest(c, "invalid displayName")
 			case errors.Is(err, service.ErrInvalidPassword):
 				return badRequest(c, "invalid password")
 			case errors.Is(err, service.ErrInvalidRole):

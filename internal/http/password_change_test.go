@@ -15,9 +15,8 @@ func TestChangePasswordEndpoint(t *testing.T) {
 
 	createBody := map[string]any{
 		"user": map[string]any{
-			"username":    "pwchange01",
-			"displayName": "Password Change",
-			"password":    "old-password",
+			"username": "pwchange01",
+			"password": "old-password",
 		},
 	}
 	createPayload, _ := json.Marshal(createBody)

@@ -162,26 +162,21 @@ func runRuntimeConsole(cfg config.Config, userService *service.UserService) {
 func runAdminUser(ctx context.Context, userService *service.UserService, args []string) error {
 	if len(args) < 3 || args[0] != "create" {
 		printUsage()
-		return fmt.Errorf("usage: admin user create <username> <password> [display_name] [role]")
+		return fmt.Errorf("usage: admin user create <username> <password> [role]")
 	}
 
 	username := strings.TrimSpace(args[1])
 	password := strings.TrimSpace(args[2])
-	displayName := ""
-	if len(args) >= 4 {
-		displayName = strings.TrimSpace(args[3])
-	}
 	role := "USER"
-	if len(args) >= 5 {
-		role = strings.TrimSpace(args[4])
+	if len(args) >= 4 {
+		role = strings.TrimSpace(args[3])
 	}
 
 	admin := &models.User{Role: "ADMIN"}
 	user, err := userService.CreateUser(ctx, admin, service.CreateUserInput{
-		Username:    username,
-		DisplayName: displayName,
-		Password:    password,
-		Role:        role,
+		Username: username,
+		Password: password,
+		Role:     role,
 	}, true)
 	if err != nil {
 		return fmt.Errorf("create user failed: %w", err)
@@ -412,7 +407,7 @@ func printUsage() {
 
 func printRuntimeConsoleUsage() {
 	fmt.Println("Runtime Console Commands:")
-	fmt.Println("  user create <username> <password> [display_name] [role]")
+	fmt.Println("  user create <username> <password> [role]")
 	fmt.Println("  token create <username_or_id> [description] [--ttl 7d|24h]  # default ttl=7d")
 	fmt.Println("  token list <username_or_id> [--all]")
 	fmt.Println("  token revoke <token_id>")

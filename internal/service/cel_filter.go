@@ -1,10 +1,8 @@
 package service
 
 import (
-	"encoding/json"
 	"fmt"
 	"math"
-	"regexp"
 	"slices"
 	"strings"
 
@@ -21,8 +19,6 @@ type CELMemoFilter struct {
 	program      cel.Program
 	sqlPrefilter store.MemoSQLPrefilter
 }
-
-var legacyTagInExpr = regexp.MustCompile(`(?i)\btag\s+in\s+\[((?:\s*"[^"\\]*(?:\\.[^"\\]*)*"\s*,?)*)\]`)
 
 var (
 	allVisibilityValues = []models.Visibility{
@@ -42,11 +38,6 @@ func CompileMemoFilter(raw string) (*CELMemoFilter, error) {
 		return nil, nil
 	}
 
-	rewritten, err := rewriteLegacyTagIn(normalized)
-	if err != nil {
-		return nil, err
-	}
-
 	env, err := cel.NewEnv(
 		cel.Declarations(
 			decls.NewVar("creator_id", decls.Int),
@@ -60,7 +51,7 @@ func CompileMemoFilter(raw string) (*CELMemoFilter, error) {
 		return nil, fmt.Errorf("build CEL env: %w", err)
 	}
 
-	ast, issues := env.Compile(rewritten)
+	ast, issues := env.Compile(normalized)
 	if issues != nil && issues.Err() != nil {
 		return nil, fmt.Errorf("invalid CEL filter: %w", issues.Err())
 	}
@@ -111,54 +102,6 @@ func asBool(v ref.Val) (bool, error) {
 	default:
 		return false, fmt.Errorf("filter expression must return bool, got %T", val)
 	}
-}
-
-func rewriteLegacyTagIn(input string) (string, error) {
-	matches := legacyTagInExpr.FindAllStringSubmatchIndex(input, -1)
-	if len(matches) == 0 {
-		return input, nil
-	}
-
-	var sb strings.Builder
-	last := 0
-	for _, m := range matches {
-		start, end := m[0], m[1]
-		listStart, listEnd := m[2], m[3]
-		sb.WriteString(input[last:start])
-		rawList := input[listStart:listEnd]
-		tags, err := parseCELQuotedStringList(rawList)
-		if err != nil {
-			return "", err
-		}
-		if len(tags) == 0 {
-			sb.WriteString("false")
-		} else {
-			conds := make([]string, 0, len(tags))
-			for _, tag := range tags {
-				escaped := celQuote(tag)
-				conds = append(conds, fmt.Sprintf(`tags.exists(t, t == "%s" || t.startsWith("%s/"))`, escaped, escaped))
-			}
-			sb.WriteString("(" + strings.Join(conds, " || ") + ")")
-		}
-		last = end
-	}
-	sb.WriteString(input[last:])
-	return sb.String(), nil
-}
-
-func parseCELQuotedStringList(raw string) ([]string, error) {
-	data := "[" + raw + "]"
-	list := []string{}
-	if err := json.Unmarshal([]byte(data), &list); err != nil {
-		return nil, fmt.Errorf("invalid tag in-list: %w", err)
-	}
-	return list, nil
-}
-
-func celQuote(s string) string {
-	s = strings.ReplaceAll(s, `\`, `\\`)
-	s = strings.ReplaceAll(s, `"`, `\"`)
-	return s
 }
 
 func buildSQLPrefilter(expr *exprpb.Expr) store.MemoSQLPrefilter {

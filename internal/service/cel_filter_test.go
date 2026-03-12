@@ -93,8 +93,8 @@ func TestCompileMemoFilter_SQLPrefilterTagsExists(t *testing.T) {
 	}
 }
 
-func TestCompileMemoFilter_SQLPrefilterLegacyTagIn(t *testing.T) {
-	filter, err := CompileMemoFilter(`tag in ["book"] && visibility == "PRIVATE"`)
+func TestCompileMemoFilter_SQLPrefilterTagMembership(t *testing.T) {
+	filter, err := CompileMemoFilter(`"book" in tags && visibility == "PRIVATE"`)
 	if err != nil {
 		t.Fatalf("CompileMemoFilter() error = %v", err)
 	}
@@ -105,8 +105,8 @@ func TestCompileMemoFilter_SQLPrefilterLegacyTagIn(t *testing.T) {
 	if len(pf.VisibilityIn) != 1 || pf.VisibilityIn[0] != models.VisibilityPrivate {
 		t.Fatalf("unexpected visibilityIn: %+v", pf.VisibilityIn)
 	}
-	if len(pf.TagGroups[0].Options) != 2 {
-		t.Fatalf("expected two tag options (exact/prefix), got %+v", pf.TagGroups[0].Options)
+	if len(pf.TagGroups[0].Options) != 1 {
+		t.Fatalf("expected one exact tag option, got %+v", pf.TagGroups[0].Options)
 	}
 }
 

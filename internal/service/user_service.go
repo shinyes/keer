@@ -36,7 +36,6 @@ type UserService struct {
 
 var (
 	ErrInvalidUsername        = errors.New("invalid username")
-	ErrInvalidDisplayName     = errors.New("invalid display name")
 	ErrInvalidPassword        = errors.New("invalid password")
 	ErrInvalidCurrentPassword = errors.New("invalid current password")
 	ErrInvalidEncryptionKey   = errors.New("invalid encryption key")
@@ -65,7 +64,6 @@ const (
 
 type CreateUserInput struct {
 	Username     string
-	DisplayName  string
 	Password     string
 	Role         string
 	ValidateOnly bool
@@ -413,18 +411,11 @@ func (s *UserService) AuthenticateToken(ctx context.Context, rawToken string) (m
 
 func (s *UserService) CreateUser(ctx context.Context, creator *models.User, input CreateUserInput, allowRegistration bool) (models.User, error) {
 	username := normalizeUsername(input.Username)
-	displayName := strings.TrimSpace(input.DisplayName)
 	password := strings.TrimSpace(input.Password)
 	role := normalizeUserRole(input.Role)
 
 	if !usernamePattern.MatchString(username) {
 		return models.User{}, ErrInvalidUsername
-	}
-	if displayName == "" {
-		displayName = username
-	}
-	if len([]rune(displayName)) > 64 {
-		return models.User{}, ErrInvalidDisplayName
 	}
 	if password == "" {
 		return models.User{}, ErrInvalidPassword
@@ -453,7 +444,6 @@ func (s *UserService) CreateUser(ctx context.Context, creator *models.User, inpu
 	if input.ValidateOnly {
 		return models.User{
 			Username:          username,
-			DisplayName:       displayName,
 			Role:              roleToAssign,
 			DefaultVisibility: models.VisibilityPrivate,
 		}, nil
@@ -470,7 +460,7 @@ func (s *UserService) CreateUser(ctx context.Context, creator *models.User, inpu
 		return models.User{}, fmt.Errorf("hash password: %w", err)
 	}
 
-	user, err := s.store.CreateUserWithProfile(ctx, username, displayName, string(passwordHash), roleToAssign)
+	user, err := s.store.CreateUserWithProfile(ctx, username, string(passwordHash), roleToAssign)
 	if err != nil {
 		if isUniqueConstraintErr(err) {
 			return models.User{}, ErrUsernameAlreadyExists
