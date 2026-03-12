@@ -173,6 +173,54 @@ func registerUserRoutes(
 		})
 	})
 
+	api.Put("/users/:name/password", func(c *fiber.Ctx) error {
+		currentUser := CurrentUser(c)
+		name := strings.TrimSpace(c.Params("name"))
+		if name == "" {
+			return badRequest(c, "invalid user name")
+		}
+		user, err := userService.GetUserByIdentifier(c.Context(), name)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return notFound(c, "user not found")
+			}
+			return internalError(c, err)
+		}
+		if user.ID != currentUser.ID {
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"message": "forbidden"})
+		}
+
+		var req changeUserPasswordRequest
+		if err := c.BodyParser(&req); err != nil {
+			return badRequest(c, "invalid request body")
+		}
+
+		_, err = userService.ChangePassword(c.Context(), user.ID, req.CurrentPassword, req.NewPassword, service.UpsertUserEncryptionKeyInput{
+			Version:                  req.EncryptionSetting.RecoveryBundle.Version,
+			KDFAlgorithm:             req.EncryptionSetting.RecoveryBundle.KDFAlgorithm,
+			KDFSalt:                  req.EncryptionSetting.RecoveryBundle.KDFSalt,
+			KDFIterations:            req.EncryptionSetting.RecoveryBundle.KDFIterations,
+			WrapAlgorithm:            req.EncryptionSetting.RecoveryBundle.WrapAlgorithm,
+			WrappedAccountKey:        req.EncryptionSetting.RecoveryBundle.WrappedAccountKey,
+			SharingPublicKey:         req.EncryptionSetting.SharingPublicKey,
+			WrappedSharingPrivateKey: req.EncryptionSetting.WrappedSharingPrivateKey,
+			KeyVersion:               req.EncryptionSetting.KeyVersion,
+			Algorithms:               req.EncryptionSetting.Algorithms,
+		})
+		if err != nil {
+			switch {
+			case errors.Is(err, service.ErrInvalidCurrentPassword):
+				return badRequest(c, err.Error())
+			case errors.Is(err, service.ErrInvalidPassword), errors.Is(err, service.ErrInvalidEncryptionKey):
+				return badRequest(c, err.Error())
+			default:
+				return internalError(c, err)
+			}
+		}
+
+		return c.SendStatus(fiber.StatusNoContent)
+	})
+
 	api.Get("/users/:name\\:getStats", func(c *fiber.Ctx) error {
 		name := strings.TrimSpace(c.Params("name"))
 		if name == "" {

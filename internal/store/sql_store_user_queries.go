@@ -112,6 +112,52 @@ func (s *SQLStore) GetUserByUsername(ctx context.Context, username string) (mode
 	return user, nil
 }
 
+func (s *SQLStore) UpdateUserPasswordHashAndEncryptionKey(
+	ctx context.Context,
+	userID int64,
+	passwordHash string,
+	encryptionKey models.UserEncryptionKey,
+) (models.UserEncryptionKey, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return models.UserEncryptionKey{}, err
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	res, err := tx.ExecContext(
+		ctx,
+		`UPDATE users
+		SET password_hash = ?, update_time = ?
+		WHERE id = ?`,
+		passwordHash,
+		now,
+		userID,
+	)
+	if err != nil {
+		return models.UserEncryptionKey{}, err
+	}
+	rowsAffected, err := res.RowsAffected()
+	if err != nil {
+		return models.UserEncryptionKey{}, err
+	}
+	if rowsAffected == 0 {
+		return models.UserEncryptionKey{}, sql.ErrNoRows
+	}
+
+	if err := upsertUserEncryptionKeyWithExecutor(ctx, tx, encryptionKey); err != nil {
+		return models.UserEncryptionKey{}, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return models.UserEncryptionKey{}, err
+	}
+
+	return s.GetUserEncryptionKeyByUserID(ctx, userID)
+}
+
 func (s *SQLStore) ListUsersByIdentifiersUpdatedWithin(
 	ctx context.Context,
 	userIDs []int64,

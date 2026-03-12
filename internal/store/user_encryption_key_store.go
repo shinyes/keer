@@ -8,11 +8,20 @@ import (
 	"github.com/shinyes/keer/internal/models"
 )
 
+type queryExecutor interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
 func (s *SQLStore) GetUserEncryptionKeyByUserID(ctx context.Context, userID int64) (models.UserEncryptionKey, error) {
+	return getUserEncryptionKeyByUserIDWithExecutor(ctx, s.db, userID)
+}
+
+func getUserEncryptionKeyByUserIDWithExecutor(ctx context.Context, executor queryExecutor, userID int64) (models.UserEncryptionKey, error) {
 	var encryptionKey models.UserEncryptionKey
 	var createTime string
 	var updateTime string
-	err := s.db.QueryRowContext(
+	err := executor.QueryRowContext(
 		ctx,
 		`SELECT user_id, version, kdf_algorithm, kdf_salt, kdf_iterations, wrap_algorithm, wrapped_account_key, sharing_public_key, wrapped_sharing_private_key, key_version, algorithms, create_time, update_time
 		FROM user_encryption_keys
@@ -50,8 +59,15 @@ func (s *SQLStore) GetUserEncryptionKeyByUserID(ctx context.Context, userID int6
 }
 
 func (s *SQLStore) UpsertUserEncryptionKey(ctx context.Context, encryptionKey models.UserEncryptionKey) (models.UserEncryptionKey, error) {
+	if err := upsertUserEncryptionKeyWithExecutor(ctx, s.db, encryptionKey); err != nil {
+		return models.UserEncryptionKey{}, err
+	}
+	return s.GetUserEncryptionKeyByUserID(ctx, encryptionKey.UserID)
+}
+
+func upsertUserEncryptionKeyWithExecutor(ctx context.Context, executor queryExecutor, encryptionKey models.UserEncryptionKey) error {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err := s.db.ExecContext(
+	_, err := executor.ExecContext(
 		ctx,
 		`INSERT INTO user_encryption_keys (
 			user_id, version, kdf_algorithm, kdf_salt, kdf_iterations, wrap_algorithm, wrapped_account_key, sharing_public_key, wrapped_sharing_private_key, key_version, algorithms, create_time, update_time
@@ -82,10 +98,7 @@ func (s *SQLStore) UpsertUserEncryptionKey(ctx context.Context, encryptionKey mo
 		now,
 		now,
 	)
-	if err != nil {
-		return models.UserEncryptionKey{}, err
-	}
-	return s.GetUserEncryptionKeyByUserID(ctx, encryptionKey.UserID)
+	return err
 }
 
 func (s *SQLStore) DeleteUserEncryptionKey(ctx context.Context, userID int64) error {

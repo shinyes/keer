@@ -35,21 +35,22 @@ type UserService struct {
 }
 
 var (
-	ErrInvalidUsername       = errors.New("invalid username")
-	ErrInvalidDisplayName    = errors.New("invalid display name")
-	ErrInvalidPassword       = errors.New("invalid password")
-	ErrInvalidEncryptionKey  = errors.New("invalid encryption key")
-	ErrInvalidCredentials    = errors.New("invalid credentials")
-	ErrInvalidRefreshToken   = errors.New("invalid refresh token")
-	ErrInvalidRole           = errors.New("invalid role")
-	ErrUsernameAlreadyExists = errors.New("username already exists")
-	ErrTokenAlreadyExists    = errors.New("access token already exists")
-	ErrTokenAlreadyRevoked   = errors.New("access token already revoked")
-	ErrInvalidTokenExpiry    = errors.New("invalid token expiry")
-	ErrRegistrationDisabled  = errors.New("registration is disabled")
-	ErrCannotFriendSelf      = errors.New("cannot add yourself as a friend")
-	ErrFriendNotFound        = errors.New("friend not found")
-	usernamePattern          = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{2,31}$`)
+	ErrInvalidUsername        = errors.New("invalid username")
+	ErrInvalidDisplayName     = errors.New("invalid display name")
+	ErrInvalidPassword        = errors.New("invalid password")
+	ErrInvalidCurrentPassword = errors.New("invalid current password")
+	ErrInvalidEncryptionKey   = errors.New("invalid encryption key")
+	ErrInvalidCredentials     = errors.New("invalid credentials")
+	ErrInvalidRefreshToken    = errors.New("invalid refresh token")
+	ErrInvalidRole            = errors.New("invalid role")
+	ErrUsernameAlreadyExists  = errors.New("username already exists")
+	ErrTokenAlreadyExists     = errors.New("access token already exists")
+	ErrTokenAlreadyRevoked    = errors.New("access token already revoked")
+	ErrInvalidTokenExpiry     = errors.New("invalid token expiry")
+	ErrRegistrationDisabled   = errors.New("registration is disabled")
+	ErrCannotFriendSelf       = errors.New("cannot add yourself as a friend")
+	ErrFriendNotFound         = errors.New("friend not found")
+	usernamePattern           = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{2,31}$`)
 )
 
 const settingKeyAllowRegistration = "allow_registration"
@@ -110,6 +111,17 @@ func (s *UserService) UpsertUserEncryptionKey(
 	userID int64,
 	input UpsertUserEncryptionKeyInput,
 ) (models.UserEncryptionKey, error) {
+	encryptionKey, err := normalizeUserEncryptionKeyInput(userID, input)
+	if err != nil {
+		return models.UserEncryptionKey{}, err
+	}
+	return s.store.UpsertUserEncryptionKey(ctx, encryptionKey)
+}
+
+func normalizeUserEncryptionKeyInput(
+	userID int64,
+	input UpsertUserEncryptionKeyInput,
+) (models.UserEncryptionKey, error) {
 	input.KDFAlgorithm = strings.TrimSpace(input.KDFAlgorithm)
 	input.KDFSalt = strings.TrimSpace(input.KDFSalt)
 	input.WrapAlgorithm = strings.TrimSpace(input.WrapAlgorithm)
@@ -133,7 +145,7 @@ func (s *UserService) UpsertUserEncryptionKey(
 		return models.UserEncryptionKey{}, ErrInvalidEncryptionKey
 	}
 
-	return s.store.UpsertUserEncryptionKey(ctx, models.UserEncryptionKey{
+	return models.UserEncryptionKey{
 		UserID:                   userID,
 		Version:                  input.Version,
 		KDFAlgorithm:             input.KDFAlgorithm,
@@ -145,7 +157,46 @@ func (s *UserService) UpsertUserEncryptionKey(
 		WrappedSharingPrivateKey: input.WrappedSharingPrivateKey,
 		KeyVersion:               input.KeyVersion,
 		Algorithms:               input.Algorithms,
-	})
+	}, nil
+}
+
+func (s *UserService) ChangePassword(
+	ctx context.Context,
+	userID int64,
+	currentPassword string,
+	newPassword string,
+	input UpsertUserEncryptionKeyInput,
+) (models.UserEncryptionKey, error) {
+	currentPassword = strings.TrimSpace(currentPassword)
+	newPassword = strings.TrimSpace(newPassword)
+	if userID <= 0 || currentPassword == "" {
+		return models.UserEncryptionKey{}, ErrInvalidCurrentPassword
+	}
+	if newPassword == "" {
+		return models.UserEncryptionKey{}, ErrInvalidPassword
+	}
+
+	user, err := s.store.GetUserByID(ctx, userID)
+	if err != nil {
+		return models.UserEncryptionKey{}, err
+	}
+	if user.PasswordHash == "" {
+		return models.UserEncryptionKey{}, ErrInvalidCurrentPassword
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(currentPassword)); err != nil {
+		return models.UserEncryptionKey{}, ErrInvalidCurrentPassword
+	}
+
+	encryptionKey, err := normalizeUserEncryptionKeyInput(userID, input)
+	if err != nil {
+		return models.UserEncryptionKey{}, err
+	}
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return models.UserEncryptionKey{}, fmt.Errorf("hash password: %w", err)
+	}
+
+	return s.store.UpdateUserPasswordHashAndEncryptionKey(ctx, userID, string(passwordHash), encryptionKey)
 }
 
 func (s *UserService) GetUser(ctx context.Context, userID int64) (models.User, error) {

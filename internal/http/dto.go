@@ -359,6 +359,12 @@ type updateUserEncryptionSettingRequest struct {
 	EncryptionSetting updateUserEncryptionSetting `json:"encryptionSetting"`
 }
 
+type changeUserPasswordRequest struct {
+	CurrentPassword   string                      `json:"currentPassword"`
+	NewPassword       string                      `json:"newPassword"`
+	EncryptionSetting updateUserEncryptionSetting `json:"encryptionSetting"`
+}
+
 type updateUserEncryptionSetting struct {
 	RecoveryBundle           apiRecoveryBundle `json:"recoveryBundle"`
 	SharingPublicKey         string            `json:"sharingPublicKey"`
