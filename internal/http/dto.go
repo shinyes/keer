@@ -340,7 +340,9 @@ type apiRecoveryBundle struct {
 	Version           int    `json:"version"`
 	KDFAlgorithm      string `json:"kdfAlgorithm"`
 	KDFSalt           string `json:"kdfSalt"`
-	KDFIterations     int    `json:"kdfIterations"`
+	KDFTimeCost       int    `json:"kdfTimeCost"`
+	KDFMemoryKiB      int    `json:"kdfMemoryKiB"`
+	KDFParallelism    int    `json:"kdfParallelism"`
 	WrapAlgorithm     string `json:"wrapAlgorithm"`
 	WrappedAccountKey string `json:"wrappedAccountKey"`
 }

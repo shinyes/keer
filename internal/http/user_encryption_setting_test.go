@@ -15,10 +15,12 @@ func TestUserEncryptionSettingResponse_IncludesEmptySharingFields(t *testing.T) 
 	requestBody := map[string]any{
 		"encryptionSetting": map[string]any{
 			"recoveryBundle": map[string]any{
-				"version":           1,
-				"kdfAlgorithm":      "PBKDF2_HMAC_SHA256",
+				"version":           2,
+				"kdfAlgorithm":      "ARGON2ID",
 				"kdfSalt":           "salt",
-				"kdfIterations":     210000,
+				"kdfTimeCost":       3,
+				"kdfMemoryKiB":      32768,
+				"kdfParallelism":    1,
 				"wrapAlgorithm":     "AES_GCM",
 				"wrappedAccountKey": "wrapped-account-key",
 			},
@@ -91,5 +93,43 @@ func TestUserEncryptionSettingResponse_IncludesEmptySharingFields(t *testing.T) 
 	}
 	if _, exists := encryptionSetting["algorithms"]; !exists {
 		t.Fatalf("expected algorithms in get response")
+	}
+}
+
+func TestUserEncryptionSettingRejectsLegacyRecoveryBundle(t *testing.T) {
+	app := newTestApp(t, true, true)
+
+	requestBody := map[string]any{
+		"encryptionSetting": map[string]any{
+			"recoveryBundle": map[string]any{
+				"version":           1,
+				"kdfAlgorithm":      "PBKDF2_HMAC_SHA256",
+				"kdfSalt":           "salt",
+				"kdfTimeCost":       3,
+				"kdfMemoryKiB":      32768,
+				"kdfParallelism":    1,
+				"wrapAlgorithm":     "AES_GCM",
+				"wrappedAccountKey": "wrapped-account-key",
+			},
+			"sharingPublicKey":         "",
+			"wrappedSharingPrivateKey": "",
+			"keyVersion":               1,
+			"algorithms":               "",
+		},
+	}
+	payload, _ := json.Marshal(requestBody)
+
+	putReq := httptest.NewRequest(http.MethodPut, "/api/v1/users/1/settings/ENCRYPTION", bytes.NewReader(payload))
+	putReq.Header.Set("Authorization", "Bearer demo-token")
+	putReq.Header.Set("Content-Type", "application/json")
+	putResp, err := app.Test(putReq, 5000)
+	if err != nil {
+		t.Fatalf("put encryption setting request failed: %v", err)
+	}
+	defer putResp.Body.Close()
+
+	if putResp.StatusCode != http.StatusBadRequest {
+		body, _ := io.ReadAll(putResp.Body)
+		t.Fatalf("expected 400, got %d body=%s", putResp.StatusCode, string(body))
 	}
 }

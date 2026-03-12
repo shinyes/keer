@@ -23,7 +23,7 @@ func getUserEncryptionKeyByUserIDWithExecutor(ctx context.Context, executor quer
 	var updateTime string
 	err := executor.QueryRowContext(
 		ctx,
-		`SELECT user_id, version, kdf_algorithm, kdf_salt, kdf_iterations, wrap_algorithm, wrapped_account_key, sharing_public_key, wrapped_sharing_private_key, key_version, algorithms, create_time, update_time
+		`SELECT user_id, version, kdf_algorithm, kdf_salt, kdf_time_cost, kdf_memory_kib, kdf_parallelism, wrap_algorithm, wrapped_account_key, sharing_public_key, wrapped_sharing_private_key, key_version, algorithms, create_time, update_time
 		FROM user_encryption_keys
 		WHERE user_id = ?`,
 		userID,
@@ -32,7 +32,9 @@ func getUserEncryptionKeyByUserIDWithExecutor(ctx context.Context, executor quer
 		&encryptionKey.Version,
 		&encryptionKey.KDFAlgorithm,
 		&encryptionKey.KDFSalt,
-		&encryptionKey.KDFIterations,
+		&encryptionKey.KDFTimeCost,
+		&encryptionKey.KDFMemoryKiB,
+		&encryptionKey.KDFParallelism,
 		&encryptionKey.WrapAlgorithm,
 		&encryptionKey.WrappedAccountKey,
 		&encryptionKey.SharingPublicKey,
@@ -70,13 +72,15 @@ func upsertUserEncryptionKeyWithExecutor(ctx context.Context, executor queryExec
 	_, err := executor.ExecContext(
 		ctx,
 		`INSERT INTO user_encryption_keys (
-			user_id, version, kdf_algorithm, kdf_salt, kdf_iterations, wrap_algorithm, wrapped_account_key, sharing_public_key, wrapped_sharing_private_key, key_version, algorithms, create_time, update_time
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			user_id, version, kdf_algorithm, kdf_salt, kdf_time_cost, kdf_memory_kib, kdf_parallelism, wrap_algorithm, wrapped_account_key, sharing_public_key, wrapped_sharing_private_key, key_version, algorithms, create_time, update_time
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(user_id) DO UPDATE SET
 			version = excluded.version,
 			kdf_algorithm = excluded.kdf_algorithm,
 			kdf_salt = excluded.kdf_salt,
-			kdf_iterations = excluded.kdf_iterations,
+			kdf_time_cost = excluded.kdf_time_cost,
+			kdf_memory_kib = excluded.kdf_memory_kib,
+			kdf_parallelism = excluded.kdf_parallelism,
 			wrap_algorithm = excluded.wrap_algorithm,
 			wrapped_account_key = excluded.wrapped_account_key,
 			sharing_public_key = excluded.sharing_public_key,
@@ -88,7 +92,9 @@ func upsertUserEncryptionKeyWithExecutor(ctx context.Context, executor queryExec
 		encryptionKey.Version,
 		encryptionKey.KDFAlgorithm,
 		encryptionKey.KDFSalt,
-		encryptionKey.KDFIterations,
+		encryptionKey.KDFTimeCost,
+		encryptionKey.KDFMemoryKiB,
+		encryptionKey.KDFParallelism,
 		encryptionKey.WrapAlgorithm,
 		encryptionKey.WrappedAccountKey,
 		encryptionKey.SharingPublicKey,

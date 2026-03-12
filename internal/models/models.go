@@ -57,7 +57,9 @@ type UserEncryptionKey struct {
 	Version                  int
 	KDFAlgorithm             string
 	KDFSalt                  string
-	KDFIterations            int
+	KDFTimeCost              int
+	KDFMemoryKiB             int
+	KDFParallelism           int
 	WrapAlgorithm            string
 	WrappedAccountKey        string
 	SharingPublicKey         string

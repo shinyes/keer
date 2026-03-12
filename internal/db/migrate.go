@@ -59,7 +59,9 @@ func Migrate(db *sql.DB) error {
 			version INTEGER NOT NULL,
 			kdf_algorithm TEXT NOT NULL,
 			kdf_salt TEXT NOT NULL,
-			kdf_iterations INTEGER NOT NULL,
+			kdf_time_cost INTEGER NOT NULL,
+			kdf_memory_kib INTEGER NOT NULL,
+			kdf_parallelism INTEGER NOT NULL,
 			wrap_algorithm TEXT NOT NULL,
 			wrapped_account_key TEXT NOT NULL,
 			sharing_public_key TEXT NOT NULL DEFAULT '',
@@ -365,6 +367,30 @@ func Migrate(db *sql.DB) error {
 		"attachment_upload_sessions",
 		"thumbnail_temp_path",
 		"TEXT NOT NULL DEFAULT ''",
+	); err != nil {
+		return fmt.Errorf("migration failed: %w", err)
+	}
+	if err := ensureColumn(
+		db,
+		"user_encryption_keys",
+		"kdf_time_cost",
+		"INTEGER NOT NULL DEFAULT 3",
+	); err != nil {
+		return fmt.Errorf("migration failed: %w", err)
+	}
+	if err := ensureColumn(
+		db,
+		"user_encryption_keys",
+		"kdf_memory_kib",
+		"INTEGER NOT NULL DEFAULT 32768",
+	); err != nil {
+		return fmt.Errorf("migration failed: %w", err)
+	}
+	if err := ensureColumn(
+		db,
+		"user_encryption_keys",
+		"kdf_parallelism",
+		"INTEGER NOT NULL DEFAULT 1",
 	); err != nil {
 		return fmt.Errorf("migration failed: %w", err)
 	}

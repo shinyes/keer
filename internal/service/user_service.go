@@ -80,7 +80,9 @@ type UpsertUserEncryptionKeyInput struct {
 	Version                  int
 	KDFAlgorithm             string
 	KDFSalt                  string
-	KDFIterations            int
+	KDFTimeCost              int
+	KDFMemoryKiB             int
+	KDFParallelism           int
 	WrapAlgorithm            string
 	WrappedAccountKey        string
 	SharingPublicKey         string
@@ -133,11 +135,13 @@ func normalizeUserEncryptionKeyInput(
 		input.KeyVersion = 1
 	}
 	if userID <= 0 ||
-		input.Version <= 0 ||
-		input.KDFAlgorithm == "" ||
+		input.Version != accountMasterKeyRecoveryBundleVersion ||
+		input.KDFAlgorithm != accountMasterKeyRecoveryKDFAlgorithm ||
 		input.KDFSalt == "" ||
-		input.KDFIterations <= 0 ||
-		input.WrapAlgorithm == "" ||
+		input.KDFTimeCost <= 0 ||
+		input.KDFMemoryKiB <= 0 ||
+		input.KDFParallelism <= 0 ||
+		input.WrapAlgorithm != accountMasterKeyRecoveryWrapAlgorithm ||
 		input.WrappedAccountKey == "" {
 		return models.UserEncryptionKey{}, ErrInvalidEncryptionKey
 	}
@@ -150,7 +154,9 @@ func normalizeUserEncryptionKeyInput(
 		Version:                  input.Version,
 		KDFAlgorithm:             input.KDFAlgorithm,
 		KDFSalt:                  input.KDFSalt,
-		KDFIterations:            input.KDFIterations,
+		KDFTimeCost:              input.KDFTimeCost,
+		KDFMemoryKiB:             input.KDFMemoryKiB,
+		KDFParallelism:           input.KDFParallelism,
 		WrapAlgorithm:            input.WrapAlgorithm,
 		WrappedAccountKey:        input.WrappedAccountKey,
 		SharingPublicKey:         input.SharingPublicKey,
@@ -159,6 +165,12 @@ func normalizeUserEncryptionKeyInput(
 		Algorithms:               input.Algorithms,
 	}, nil
 }
+
+const (
+	accountMasterKeyRecoveryBundleVersion = 2
+	accountMasterKeyRecoveryKDFAlgorithm  = "ARGON2ID"
+	accountMasterKeyRecoveryWrapAlgorithm = "AES_GCM"
+)
 
 func (s *UserService) ChangePassword(
 	ctx context.Context,

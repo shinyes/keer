@@ -37,11 +37,13 @@ func TestChangePasswordEndpoint(t *testing.T) {
 	initialSettingBody := map[string]any{
 		"encryptionSetting": map[string]any{
 			"recoveryBundle": map[string]any{
-				"version":           1,
-				"kdfAlgorithm":      "PBKDF2_HMAC_SHA256",
+				"version":           2,
+				"kdfAlgorithm":      "ARGON2ID",
 				"kdfSalt":           "salt-old",
-				"kdfIterations":     210000,
-				"wrapAlgorithm":     "AES_GCM_ACCOUNT_MASTER_KEY_V1",
+				"kdfTimeCost":       3,
+				"kdfMemoryKiB":      32768,
+				"kdfParallelism":    1,
+				"wrapAlgorithm":     "AES_GCM",
 				"wrappedAccountKey": "iv-old:cipher-old",
 			},
 			"sharingPublicKey":         "sharing-public",
@@ -68,11 +70,13 @@ func TestChangePasswordEndpoint(t *testing.T) {
 		"newPassword":     "new-password",
 		"encryptionSetting": map[string]any{
 			"recoveryBundle": map[string]any{
-				"version":           1,
-				"kdfAlgorithm":      "PBKDF2_HMAC_SHA256",
+				"version":           2,
+				"kdfAlgorithm":      "ARGON2ID",
 				"kdfSalt":           "salt-new",
-				"kdfIterations":     210000,
-				"wrapAlgorithm":     "AES_GCM_ACCOUNT_MASTER_KEY_V1",
+				"kdfTimeCost":       3,
+				"kdfMemoryKiB":      32768,
+				"kdfParallelism":    1,
+				"wrapAlgorithm":     "AES_GCM",
 				"wrappedAccountKey": "iv-new:cipher-new",
 			},
 			"sharingPublicKey":         "sharing-public",
