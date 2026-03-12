@@ -24,6 +24,60 @@ func registerUserRoutes(
 		})
 	})
 
+	api.Get("/friends", func(c *fiber.Ctx) error {
+		currentUser := CurrentUser(c)
+		friends, err := userService.ListFriends(c.Context(), currentUser.ID)
+		if err != nil {
+			return internalError(c, err)
+		}
+		resp := listUsersResponse{
+			Users: make([]apiUser, 0, len(friends)),
+		}
+		for _, friend := range friends {
+			resp.Users = append(resp.Users, toAPIUserSync(friend))
+		}
+		return c.JSON(resp)
+	})
+
+	api.Post("/friends", func(c *fiber.Ctx) error {
+		currentUser := CurrentUser(c)
+		var req addFriendRequest
+		if err := c.BodyParser(&req); err != nil {
+			return badRequest(c, "invalid request body")
+		}
+		friend, err := userService.AddFriend(c.Context(), currentUser.ID, req.User)
+		if err != nil {
+			switch {
+			case errors.Is(err, service.ErrCannotFriendSelf):
+				return badRequest(c, err.Error())
+			case errors.Is(err, service.ErrFriendNotFound):
+				return notFound(c, "user not found")
+			default:
+				return internalError(c, err)
+			}
+		}
+		return c.JSON(toAPIUserSync(friend))
+	})
+
+	api.Delete("/friends/:name", func(c *fiber.Ctx) error {
+		currentUser := CurrentUser(c)
+		name := strings.TrimSpace(c.Params("name"))
+		if name == "" {
+			return badRequest(c, "invalid user name")
+		}
+		if err := userService.RemoveFriend(c.Context(), currentUser.ID, name); err != nil {
+			switch {
+			case errors.Is(err, service.ErrCannotFriendSelf):
+				return badRequest(c, err.Error())
+			case errors.Is(err, service.ErrFriendNotFound):
+				return notFound(c, "friend not found")
+			default:
+				return internalError(c, err)
+			}
+		}
+		return c.SendStatus(fiber.StatusNoContent)
+	})
+
 	api.Get("/users/:name/settings/GENERAL", func(c *fiber.Ctx) error {
 		currentUser := CurrentUser(c)
 		name := strings.TrimSpace(c.Params("name"))

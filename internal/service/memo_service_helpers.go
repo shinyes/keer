@@ -358,9 +358,67 @@ type collaboratorPayloadWrappedKey struct {
 	SlotRef  string `json:"slotRef"`
 }
 
+func (s *MemoService) ensureCollaboratorsAreFriends(
+	ctx context.Context,
+	ownerID int64,
+	tags []string,
+	payloadEnvelope string,
+) error {
+	seen := make(map[int64]struct{}, len(tags))
+	for _, tag := range tags {
+		normalized := strings.TrimSpace(tag)
+		if !strings.HasPrefix(normalized, "collab/") {
+			continue
+		}
+		collaboratorID, err := strconv.ParseInt(strings.TrimSpace(strings.TrimPrefix(normalized, "collab/")), 10, 64)
+		if err != nil || collaboratorID <= 0 || collaboratorID == ownerID {
+			continue
+		}
+		seen[collaboratorID] = struct{}{}
+	}
+	trimmedEnvelope := strings.TrimSpace(payloadEnvelope)
+	if trimmedEnvelope != "" {
+		var envelope collaboratorPayloadEnvelope
+		if err := json.Unmarshal([]byte(trimmedEnvelope), &envelope); err == nil {
+			for _, wrappedKey := range envelope.WrappedKeys {
+				if strings.TrimSpace(wrappedKey.SlotType) != "account_public" {
+					continue
+				}
+				userID, ok := collaboratorIDFromWrappedSlotRef(wrappedKey.SlotRef)
+				if !ok || userID == ownerID {
+					continue
+				}
+				seen[userID] = struct{}{}
+			}
+		}
+	}
+	for userID := range seen {
+		isFriend, err := s.store.AreFriends(ctx, ownerID, userID)
+		if err != nil {
+			return err
+		}
+		if !isFriend {
+			return fmt.Errorf("collaborator %d is not a friend of memo creator", userID)
+		}
+	}
+	return nil
+}
+
 func mergeCollaboratorTags(tags []string, payloadEnvelope string) []string {
 	merged := make([]string, 0, len(tags))
 	merged = append(merged, tags...)
+	seen := make(map[int64]struct{}, len(tags))
+	for _, tag := range tags {
+		normalized := strings.TrimSpace(tag)
+		if !strings.HasPrefix(normalized, "collab/") {
+			continue
+		}
+		collaboratorID, err := strconv.ParseInt(strings.TrimSpace(strings.TrimPrefix(normalized, "collab/")), 10, 64)
+		if err != nil || collaboratorID <= 0 {
+			continue
+		}
+		seen[collaboratorID] = struct{}{}
+	}
 	trimmedEnvelope := strings.TrimSpace(payloadEnvelope)
 	if trimmedEnvelope == "" {
 		return merged
@@ -377,6 +435,10 @@ func mergeCollaboratorTags(tags []string, payloadEnvelope string) []string {
 		if !ok {
 			continue
 		}
+		if _, exists := seen[userID]; exists {
+			continue
+		}
+		seen[userID] = struct{}{}
 		merged = append(merged, fmt.Sprintf("collab/%d", userID))
 	}
 	return merged

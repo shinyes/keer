@@ -14,6 +14,7 @@ func TestListMemoChanges_IncludesCreateAndDeleteEvents(t *testing.T) {
 	owner := mustCreateUser(t, services.store, "owner-sync")
 	collaborator := mustCreateUser(t, services.store, "collab-sync")
 	outsider := mustCreateUser(t, services.store, "outsider-sync")
+	mustAddFriend(t, services.store, owner.ID, collaborator.ID)
 
 	collaboratorTag := fmt.Sprintf("collab/%d", collaborator.ID)
 
@@ -102,6 +103,7 @@ func TestListMemoChanges_IncludesVisibilityRevocationEvents(t *testing.T) {
 
 	owner := mustCreateUser(t, services.store, "owner-revoke")
 	collaborator := mustCreateUser(t, services.store, "collab-revoke")
+	mustAddFriend(t, services.store, owner.ID, collaborator.ID)
 
 	collaboratorTag := fmt.Sprintf("collab/%d", collaborator.ID)
 	created, err := services.memoService.CreateMemo(ctx, owner.ID, CreateMemoInput{

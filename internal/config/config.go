@@ -26,7 +26,6 @@ type S3Config struct {
 
 type Config struct {
 	Addr              string
-	BaseURL           string
 	DBPath            string
 	UploadsDir        string
 	BodyLimitMB       int
@@ -34,8 +33,6 @@ type Config struct {
 	Storage           StorageBackend
 	S3                S3Config
 	AllowRegistration bool
-	BootstrapUser     string
-	BootstrapToken    string
 	JWTSecret         string
 	AccessTokenTTL    time.Duration
 	RefreshTokenTTL   time.Duration
@@ -44,7 +41,6 @@ type Config struct {
 func Load() (Config, error) {
 	cfg := Config{
 		Addr:           env("APP_ADDR", ":12843"),
-		BaseURL:        strings.TrimRight(env("BASE_URL", "http://localhost:12843"), "/"),
 		DBPath:         env("DB_PATH", "./data/keer.db"),
 		UploadsDir:     env("UPLOADS_DIR", "./data/uploads"),
 		BodyLimitMB:    envInt("HTTP_BODY_LIMIT_MB", 64),
@@ -59,8 +55,6 @@ func Load() (Config, error) {
 			UsePathStyle: envBool("S3_USE_PATH_STYLE", true),
 		},
 		AllowRegistration: envBool("ALLOW_REGISTRATION", true),
-		BootstrapUser:     env("BOOTSTRAP_USER", "demo"),
-		BootstrapToken:    env("BOOTSTRAP_TOKEN", ""),
 		JWTSecret:         env("JWT_SECRET", "change-me-in-production"),
 		AccessTokenTTL:    envDuration("ACCESS_TOKEN_TTL", 15*time.Minute),
 		RefreshTokenTTL:   envDuration("REFRESH_TOKEN_TTL", 30*24*time.Hour),

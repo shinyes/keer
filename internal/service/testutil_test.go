@@ -43,3 +43,10 @@ func mustCreateUser(t *testing.T, s *store.SQLStore, username string) models.Use
 	}
 	return user
 }
+
+func mustAddFriend(t *testing.T, s *store.SQLStore, userID int64, friendID int64) {
+	t.Helper()
+	if err := s.AddFriend(context.Background(), userID, friendID); err != nil {
+		t.Fatalf("AddFriend() error = %v", err)
+	}
+}

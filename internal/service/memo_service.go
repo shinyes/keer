@@ -76,6 +76,9 @@ func (s *MemoService) CreateMemo(ctx context.Context, creatorID int64, input Cre
 	payload := models.MemoPayload{
 		Tags: normalizeMemoTags(mergeCollaboratorTags(input.Tags, input.PayloadEnvelope)),
 	}
+	if err := s.ensureCollaboratorsAreFriends(ctx, creatorID, input.Tags, input.PayloadEnvelope); err != nil {
+		return MemoWithAttachments{}, err
+	}
 
 	attachmentBindings, err := s.resolveAttachmentBindingsFromCreateInput(ctx, creatorID, input.AttachmentBindings)
 	if err != nil {
@@ -123,6 +126,22 @@ func (s *MemoService) UpdateMemo(ctx context.Context, updaterID int64, memoID in
 		return MemoWithAttachments{}, sql.ErrNoRows
 	}
 	if err := validateCoordinates(input.Latitude, input.Longitude); err != nil {
+		return MemoWithAttachments{}, err
+	}
+	nextTagsForValidation := current.Payload.Tags
+	if input.Tags != nil {
+		nextTagsForValidation = *input.Tags
+	}
+	nextPayloadEnvelopeForValidation := current.PayloadEnvelope
+	if input.PayloadEnvelope != nil {
+		nextPayloadEnvelopeForValidation = *input.PayloadEnvelope
+	}
+	if err := s.ensureCollaboratorsAreFriends(
+		ctx,
+		current.CreatorID,
+		nextTagsForValidation,
+		nextPayloadEnvelopeForValidation,
+	); err != nil {
 		return MemoWithAttachments{}, err
 	}
 

@@ -423,12 +423,12 @@ func TestCreateUserEndpoint_RegistrationSettingOverridesEnv(t *testing.T) {
 	}
 }
 
-func newTestApp(t *testing.T, allowRegistration bool, withBootstrap bool) *fiber.App {
-	app, _ := newTestAppWithUserService(t, allowRegistration, withBootstrap)
+func newTestApp(t *testing.T, allowRegistration bool, withAuthFixture bool) *fiber.App {
+	app, _ := newTestAppWithUserService(t, allowRegistration, withAuthFixture)
 	return app
 }
 
-func newTestAppWithUserService(t *testing.T, allowRegistration bool, withBootstrap bool) (*fiber.App, *service.UserService) {
+func newTestAppWithUserService(t *testing.T, allowRegistration bool, withAuthFixture bool) (*fiber.App, *service.UserService) {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "http_test.db")
 	sqliteDB, err := db.OpenSQLite(dbPath)
@@ -444,9 +444,9 @@ func newTestAppWithUserService(t *testing.T, allowRegistration bool, withBootstr
 
 	sqlStore := store.New(sqliteDB)
 	userService := service.NewUserService(sqlStore)
-	if withBootstrap {
-		if err := userService.EnsureBootstrap(context.Background(), "demo", "demo-token"); err != nil {
-			t.Fatalf("EnsureBootstrap() error = %v", err)
+	if withAuthFixture {
+		if _, err := seedTestAuthFixture(context.Background(), sqlStore); err != nil {
+			t.Fatalf("seedTestAuthFixture() error = %v", err)
 		}
 	}
 	memoService := service.NewMemoService(sqlStore)
@@ -462,4 +462,16 @@ func newTestAppWithUserService(t *testing.T, allowRegistration bool, withBootstr
 		AllowRegistration: allowRegistration,
 	}
 	return NewRouter(cfg, userService, memoService, groupService, attachmentService), userService
+}
+
+func seedTestAuthFixture(ctx context.Context, sqlStore *store.SQLStore) (string, error) {
+	user, err := sqlStore.CreateUser(ctx, "demo", "demo", "HOST")
+	if err != nil {
+		return "", err
+	}
+	token := "demo-token"
+	if _, err := sqlStore.CreatePersonalAccessToken(ctx, user.ID, token, "test token"); err != nil {
+		return "", err
+	}
+	return token, nil
 }

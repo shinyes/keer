@@ -12,7 +12,6 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/compress"
-	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/gofiber/fiber/v2/middleware/requestid"
 
@@ -40,9 +39,6 @@ func NewRouter(
 		Header: "X-Request-ID",
 	}))
 	app.Use(httpAccessLogMiddleware())
-	app.Use(cors.New(cors.Config{
-		AllowOrigins: cfg.BaseURL,
-	}))
 	app.Use(compress.New(compress.Config{
 		Level: compress.LevelBestSpeed,
 		Next: func(c *fiber.Ctx) bool {
@@ -179,7 +175,7 @@ func NewRouter(
 	api := app.Group("/api/v1", AuthMiddleware(userService))
 	registerUserRoutes(api, userService, memoService)
 	registerMemoRoutes(api, memoService, buildAPIMemo)
-	registerGroupRoutes(api, groupService)
+	registerGroupRoutes(api, userService, groupService)
 
 	api.Get("/attachments", func(c *fiber.Ctx) error {
 		currentUser := CurrentUser(c)

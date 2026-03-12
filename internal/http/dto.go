@@ -79,6 +79,10 @@ type listUsersResponse struct {
 	Users []apiUser `json:"users"`
 }
 
+type addFriendRequest struct {
+	User string `json:"user"`
+}
+
 type listUserChangesResponse struct {
 	Users      []apiUser `json:"users"`
 	SyncAnchor string    `json:"syncAnchor"`
@@ -178,6 +182,14 @@ type updateGroupRequest struct {
 	Description *string `json:"description"`
 }
 
+type addGroupMemberRequest struct {
+	User string `json:"user"`
+}
+
+type createDirectGroupRequest struct {
+	User string `json:"user"`
+}
+
 type apiGroupMember struct {
 	Name        string `json:"name"`
 	Username    string `json:"username"`
@@ -189,9 +201,15 @@ type apiGroup struct {
 	Creator     string           `json:"creator"`
 	CreateTime  string           `json:"createTime,omitempty"`
 	UpdateTime  string           `json:"updateTime,omitempty"`
+	Type        string           `json:"type,omitempty"`
+	HasUnread   bool             `json:"hasUnread"`
 	GroupName   string           `json:"groupName"`
 	Description string           `json:"description,omitempty"`
 	Members     []apiGroupMember `json:"members,omitempty"`
+}
+
+type markGroupReadRequest struct {
+	LastReadMessage string `json:"lastReadMessage"`
 }
 
 type listGroupMessagesResponse struct {

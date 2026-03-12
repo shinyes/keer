@@ -107,13 +107,25 @@ type Memo struct {
 }
 
 type Group struct {
-	ID          int64
-	GroupName   string
-	Description string
-	CreatorID   int64
-	CreateTime  time.Time
-	UpdateTime  time.Time
+	ID                    int64
+	GroupName             string
+	Description           string
+	Type                  GroupType
+	DirectKey             string
+	CreatorID             int64
+	LastReadMessageID     int64
+	LastIncomingMessageID int64
+	HasUnread             bool
+	CreateTime            time.Time
+	UpdateTime            time.Time
 }
+
+type GroupType string
+
+const (
+	GroupTypeGroup  GroupType = "GROUP"
+	GroupTypeDirect GroupType = "DIRECT"
+)
 
 type GroupMember struct {
 	GroupID  int64

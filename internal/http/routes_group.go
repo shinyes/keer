@@ -1,6 +1,7 @@
 package http
 
 import (
+	"errors"
 	"strconv"
 	"strings"
 
@@ -11,8 +12,32 @@ import (
 
 func registerGroupRoutes(
 	api fiber.Router,
+	userService *service.UserService,
 	groupService *service.GroupService,
 ) {
+	api.Post("/directs", func(c *fiber.Ctx) error {
+		currentUser := CurrentUser(c)
+		var req createDirectGroupRequest
+		if err := c.BodyParser(&req); err != nil {
+			return badRequest(c, "invalid request body")
+		}
+		targetUser, err := userService.GetUserByIdentifier(c.Context(), req.User)
+		if err != nil {
+			if mapped := mapNoRowsToNotFound(c, err, "user not found"); mapped != nil {
+				return mapped
+			}
+			return internalError(c, err)
+		}
+		group, err := groupService.CreateDirectGroup(c.Context(), currentUser.ID, targetUser.ID)
+		if err != nil {
+			if errors.Is(err, service.ErrDirectGroupRequiresFriend) {
+				return badRequest(c, err.Error())
+			}
+			return internalError(c, err)
+		}
+		return c.JSON(toAPIGroup(group))
+	})
+
 	api.Get("/groups", func(c *fiber.Ctx) error {
 		currentUser := CurrentUser(c)
 		groups, err := groupService.ListGroups(c.Context(), currentUser.ID)
@@ -47,16 +72,30 @@ func registerGroupRoutes(
 		return c.JSON(toAPIGroup(group))
 	})
 
-	api.Post("/groups/:id/join", func(c *fiber.Ctx) error {
+	api.Post("/groups/:id/members", func(c *fiber.Ctx) error {
 		currentUser := CurrentUser(c)
 		groupID, err := parseRequiredIDParam(c, "id", "invalid group id")
 		if err != nil {
 			return err
 		}
-		group, err := groupService.JoinGroup(c.Context(), currentUser.ID, groupID)
+		var req addGroupMemberRequest
+		if err := c.BodyParser(&req); err != nil {
+			return badRequest(c, "invalid request body")
+		}
+		targetUser, err := userService.GetUserByIdentifier(c.Context(), req.User)
+		if err != nil {
+			if mapped := mapNoRowsToNotFound(c, err, "user not found"); mapped != nil {
+				return mapped
+			}
+			return internalError(c, err)
+		}
+		group, err := groupService.AddGroupMember(c.Context(), currentUser.ID, groupID, targetUser.ID)
 		if err != nil {
 			if mapped := mapNoRowsToNotFound(c, err, "group not found"); mapped != nil {
 				return mapped
+			}
+			if errors.Is(err, service.ErrGroupInviteRequiresFriend) || errors.Is(err, service.ErrDirectGroupMemberLimit) {
+				return badRequest(c, err.Error())
 			}
 			return internalError(c, err)
 		}
@@ -77,6 +116,9 @@ func registerGroupRoutes(
 		if err != nil {
 			if mapped := mapNoRowsToNotFound(c, err, "group not found"); mapped != nil {
 				return mapped
+			}
+			if errors.Is(err, service.ErrDirectGroupImmutable) {
+				return badRequest(c, err.Error())
 			}
 			return badRequest(c, err.Error())
 		}
@@ -130,6 +172,32 @@ func registerGroupRoutes(
 			resp.Messages = append(resp.Messages, toAPIGroupMessage(msg))
 		}
 		return c.JSON(resp)
+	})
+
+	api.Post("/groups/:id/read", func(c *fiber.Ctx) error {
+		currentUser := CurrentUser(c)
+		groupID, err := parseRequiredIDParam(c, "id", "invalid group id")
+		if err != nil {
+			return err
+		}
+		var req markGroupReadRequest
+		if err := c.BodyParser(&req); err != nil {
+			return badRequest(c, "invalid request body")
+		}
+		lastReadMessageID := int64(0)
+		if trimmed := strings.TrimSpace(req.LastReadMessage); trimmed != "" {
+			lastReadMessageID, err = parseMessageResourceID(trimmed)
+			if err != nil {
+				return badRequest(c, "invalid lastReadMessage")
+			}
+		}
+		if err := groupService.MarkGroupRead(c.Context(), currentUser.ID, groupID, lastReadMessageID); err != nil {
+			if mapped := mapNoRowsToNotFound(c, err, "group not found"); mapped != nil {
+				return mapped
+			}
+			return badRequest(c, err.Error())
+		}
+		return c.SendStatus(fiber.StatusNoContent)
 	})
 
 	api.Post("/groups/:id/messages", func(c *fiber.Ctx) error {

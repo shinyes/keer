@@ -21,7 +21,6 @@ WORKDIR /app
 COPY --from=build /out/keer /app/keer
 
 ENV APP_ADDR=:12843
-ENV BASE_URL=http://localhost:12843
 ENV DB_PATH=/data/keer.db
 ENV UPLOADS_DIR=/data/uploads
 

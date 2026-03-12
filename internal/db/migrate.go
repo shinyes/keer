@@ -19,6 +19,17 @@ func Migrate(db *sql.DB) error {
 			create_time TEXT NOT NULL,
 			update_time TEXT NOT NULL
 		);`,
+		`CREATE TABLE IF NOT EXISTS friendships (
+			user_id INTEGER NOT NULL,
+			friend_id INTEGER NOT NULL,
+			create_time TEXT NOT NULL,
+			PRIMARY KEY(user_id, friend_id),
+			CHECK(user_id < friend_id),
+			FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+			FOREIGN KEY(friend_id) REFERENCES users(id) ON DELETE CASCADE
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_friendships_user ON friendships(user_id, friend_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_friendships_friend ON friendships(friend_id, user_id);`,
 		`CREATE TABLE IF NOT EXISTS personal_access_tokens (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			user_id INTEGER NOT NULL,
@@ -122,15 +133,20 @@ func Migrate(db *sql.DB) error {
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			name TEXT NOT NULL,
 			description TEXT NOT NULL DEFAULT '',
+			type TEXT NOT NULL DEFAULT 'GROUP',
+			direct_key TEXT,
 			creator_id INTEGER NOT NULL,
 			create_time TEXT NOT NULL,
 			update_time TEXT NOT NULL,
 			FOREIGN KEY(creator_id) REFERENCES users(id) ON DELETE CASCADE
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_groups_creator ON groups(creator_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_groups_type ON groups(type);`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_groups_direct_key ON groups(direct_key) WHERE direct_key IS NOT NULL AND direct_key <> '';`,
 		`CREATE TABLE IF NOT EXISTS group_members (
 			group_id INTEGER NOT NULL,
 			user_id INTEGER NOT NULL,
+			last_read_message_id INTEGER NOT NULL DEFAULT 0,
 			join_time TEXT NOT NULL,
 			PRIMARY KEY(group_id, user_id),
 			FOREIGN KEY(group_id) REFERENCES groups(id) ON DELETE CASCADE,
@@ -397,6 +413,39 @@ func Migrate(db *sql.DB) error {
 		"group_messages",
 		"payload_envelope",
 		"TEXT NOT NULL DEFAULT ''",
+	); err != nil {
+		return fmt.Errorf("migration failed: %w", err)
+	}
+	if err := ensureColumn(
+		db,
+		"groups",
+		"type",
+		"TEXT NOT NULL DEFAULT 'GROUP'",
+	); err != nil {
+		return fmt.Errorf("migration failed: %w", err)
+	}
+	if err := ensureColumn(
+		db,
+		"groups",
+		"direct_key",
+		"TEXT",
+	); err != nil {
+		return fmt.Errorf("migration failed: %w", err)
+	}
+	if _, err := db.Exec(`UPDATE groups SET type = 'GROUP' WHERE type IS NULL OR TRIM(type) = ''`); err != nil {
+		return fmt.Errorf("migration failed: %w", err)
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_groups_type ON groups(type)`); err != nil {
+		return fmt.Errorf("migration failed: %w", err)
+	}
+	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_groups_direct_key ON groups(direct_key) WHERE direct_key IS NOT NULL AND direct_key <> ''`); err != nil {
+		return fmt.Errorf("migration failed: %w", err)
+	}
+	if err := ensureColumn(
+		db,
+		"group_members",
+		"last_read_message_id",
+		"INTEGER NOT NULL DEFAULT 0",
 	); err != nil {
 		return fmt.Errorf("migration failed: %w", err)
 	}

@@ -17,6 +17,10 @@ type GroupService struct {
 }
 
 var ErrGroupMessagePermissionDenied = errors.New("group message permission denied")
+var ErrGroupInviteRequiresFriend = errors.New("group members can only invite friends")
+var ErrDirectGroupRequiresFriend = errors.New("private chats can only be created with friends")
+var ErrDirectGroupMemberLimit = errors.New("private chats only support two members")
+var ErrDirectGroupImmutable = errors.New("private chats cannot be renamed")
 
 type GroupWithMembers struct {
 	Group   models.Group
@@ -62,11 +66,75 @@ func (s *GroupService) CreateGroup(
 	return s.loadGroupWithMembers(ctx, group.ID)
 }
 
-func (s *GroupService) JoinGroup(ctx context.Context, userID int64, groupID int64) (GroupWithMembers, error) {
-	if _, err := s.store.GetGroupByID(ctx, groupID); err != nil {
+func (s *GroupService) CreateDirectGroup(
+	ctx context.Context,
+	requesterID int64,
+	targetUserID int64,
+) (GroupWithMembers, error) {
+	if targetUserID <= 0 || targetUserID == requesterID {
+		return GroupWithMembers{}, fmt.Errorf("invalid private chat target")
+	}
+	isFriend, err := s.store.AreFriends(ctx, requesterID, targetUserID)
+	if err != nil {
 		return GroupWithMembers{}, err
 	}
-	if err := s.store.AddGroupMember(ctx, groupID, userID); err != nil {
+	if !isFriend {
+		return GroupWithMembers{}, ErrDirectGroupRequiresFriend
+	}
+	directKey := buildDirectGroupKey(requesterID, targetUserID)
+	existing, err := s.store.GetDirectGroupByKey(ctx, directKey)
+	if err == nil {
+		return s.loadGroupWithMembers(ctx, existing.ID)
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return GroupWithMembers{}, err
+	}
+	created, err := s.store.CreateDirectGroup(ctx, requesterID, targetUserID, directKey)
+	if err != nil {
+		if isGroupUniqueConstraintErr(err) {
+			existing, existingErr := s.store.GetDirectGroupByKey(ctx, directKey)
+			if existingErr != nil {
+				return GroupWithMembers{}, existingErr
+			}
+			return s.loadGroupWithMembers(ctx, existing.ID)
+		}
+		return GroupWithMembers{}, err
+	}
+	return s.loadGroupWithMembers(ctx, created.ID)
+}
+
+func (s *GroupService) AddGroupMember(ctx context.Context, requesterID int64, groupID int64, targetUserID int64) (GroupWithMembers, error) {
+	group, err := s.store.GetGroupByID(ctx, groupID)
+	if err != nil {
+		return GroupWithMembers{}, err
+	}
+	if group.Type == models.GroupTypeDirect {
+		return GroupWithMembers{}, ErrDirectGroupMemberLimit
+	}
+	if err := s.ensureGroupMember(ctx, groupID, requesterID); err != nil {
+		return GroupWithMembers{}, err
+	}
+	if targetUserID <= 0 {
+		return GroupWithMembers{}, fmt.Errorf("invalid target user")
+	}
+	if targetUserID == requesterID {
+		return s.loadGroupWithMembers(ctx, groupID)
+	}
+	exists, err := s.store.IsGroupMember(ctx, groupID, targetUserID)
+	if err != nil {
+		return GroupWithMembers{}, err
+	}
+	if exists {
+		return s.loadGroupWithMembers(ctx, groupID)
+	}
+	isFriend, err := s.store.AreFriends(ctx, requesterID, targetUserID)
+	if err != nil {
+		return GroupWithMembers{}, err
+	}
+	if !isFriend {
+		return GroupWithMembers{}, ErrGroupInviteRequiresFriend
+	}
+	if err := s.store.AddGroupMember(ctx, groupID, targetUserID); err != nil {
 		return GroupWithMembers{}, err
 	}
 	return s.loadGroupWithMembers(ctx, groupID)
@@ -82,6 +150,9 @@ func (s *GroupService) UpdateGroup(
 	group, err := s.store.GetGroupByID(ctx, groupID)
 	if err != nil {
 		return GroupWithMembers{}, err
+	}
+	if group.Type == models.GroupTypeDirect {
+		return GroupWithMembers{}, ErrDirectGroupImmutable
 	}
 	if err := s.ensureGroupMember(ctx, groupID, userID); err != nil {
 		return GroupWithMembers{}, err
@@ -112,6 +183,9 @@ func (s *GroupService) DeleteOrLeaveGroup(ctx context.Context, userID int64, gro
 	}
 	if err := s.ensureGroupMember(ctx, groupID, userID); err != nil {
 		return err
+	}
+	if group.Type == models.GroupTypeDirect {
+		return s.store.DeleteGroup(ctx, groupID)
 	}
 	if group.CreatorID == userID {
 		return s.store.DeleteGroup(ctx, groupID)
@@ -210,6 +284,18 @@ func (s *GroupService) ListGroupMessages(
 		nextToken = strconv.Itoa(nextOffset)
 	}
 	return result, nextToken, nil
+}
+
+func (s *GroupService) MarkGroupRead(
+	ctx context.Context,
+	userID int64,
+	groupID int64,
+	lastReadMessageID int64,
+) error {
+	if err := s.ensureGroupMember(ctx, groupID, userID); err != nil {
+		return err
+	}
+	return s.store.MarkGroupRead(ctx, groupID, userID, lastReadMessageID)
 }
 
 func (s *GroupService) CreateGroupMessage(
@@ -551,6 +637,21 @@ func (s *GroupService) loadGroupWithMembers(ctx context.Context, groupID int64) 
 		Group:   group,
 		Members: members,
 	}, nil
+}
+
+func buildDirectGroupKey(leftUserID int64, rightUserID int64) string {
+	if leftUserID > rightUserID {
+		leftUserID, rightUserID = rightUserID, leftUserID
+	}
+	return fmt.Sprintf("%d:%d", leftUserID, rightUserID)
+}
+
+func isGroupUniqueConstraintErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "unique constraint failed") || strings.Contains(msg, "constraint failed")
 }
 
 func parseGroupPageToken(pageToken string) (int, error) {

@@ -37,13 +37,10 @@ PowerShell:
 
 ```powershell
 $env:APP_ADDR=":12843"
-$env:BASE_URL="http://localhost:12843"
 $env:DB_PATH="./data/keer.db"
 $env:UPLOADS_DIR="./data/uploads"
 $env:STORAGE_BACKEND="local"
 $env:JWT_SECRET="replace-with-a-long-random-secret"
-$env:BOOTSTRAP_USER="demo"
-$env:BOOTSTRAP_TOKEN="demo-token"
 
 go run ./cmd/server
 ```
@@ -52,13 +49,10 @@ Bash:
 
 ```bash
 export APP_ADDR=:12843
-export BASE_URL=http://localhost:12843
 export DB_PATH=./data/keer.db
 export UPLOADS_DIR=./data/uploads
 export STORAGE_BACKEND=local
 export JWT_SECRET=replace-with-a-long-random-secret
-export BOOTSTRAP_USER=demo
-export BOOTSTRAP_TOKEN=demo-token
 
 go run ./cmd/server
 ```
@@ -67,7 +61,6 @@ go run ./cmd/server
 
 ```powershell
 $env:APP_ADDR=":12843"
-$env:BASE_URL="https://api.example.com"
 $env:DB_PATH="./data/keer.db"
 $env:STORAGE_BACKEND="s3"
 $env:S3_ENDPOINT="https://<endpoint>"
@@ -88,14 +81,11 @@ go run ./cmd/server
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `APP_ADDR` | `:12843` | HTTP 监听地址 |
-| `BASE_URL` | `http://localhost:12843` | 服务基地址 |
 | `DB_PATH` | `./data/keer.db` | SQLite 数据库路径 |
 | `UPLOADS_DIR` | `./data/uploads` | 本地文件存储目录，仅 `local` 模式生效 |
 | `HTTP_BODY_LIMIT_MB` | `64` | HTTP 请求体上限（MiB） |
 | `KEER_API_VERSION` | `0.1` | `/api/v1/instance/profile` 返回的 API 版本 |
 | `ALLOW_REGISTRATION` | `true` | 是否允许公开注册 |
-| `BOOTSTRAP_USER` | `demo` | 首次启动时引导用户名 |
-| `BOOTSTRAP_TOKEN` | 空 | 首次启动时引导 Personal Access Token；为空则不创建 |
 | `JWT_SECRET` | `change-me-in-production` | JWT 签名密钥，生产环境必须覆盖 |
 | `ACCESS_TOKEN_TTL` | `15m` | Access Token 有效期 |
 | `REFRESH_TOKEN_TTL` | `720h` | Refresh Token 有效期 |
@@ -111,6 +101,7 @@ go run ./cmd/server
 
 - 当 `STORAGE_BACKEND=s3` 时，所有 `S3_*` 必填项都会在启动时校验
 - `ALLOW_REGISTRATION` 仍可被运行时控制台中的 `registration enable/disable` 持久化覆盖
+- 当前默认不配置 CORS；如果未来需要浏览器跨域访问，再单独补相关能力
 
 ## Docker
 
@@ -125,11 +116,8 @@ docker build -t keer:local .
 ```bash
 docker run --rm -it \
   -p 12843:12843 \
-  -e BASE_URL=http://localhost:12843 \
   -e STORAGE_BACKEND=local \
   -e JWT_SECRET=replace-with-a-long-random-secret \
-  -e BOOTSTRAP_USER=demo \
-  -e BOOTSTRAP_TOKEN=demo-token \
   -v keer-data:/data \
   keer:local
 ```
@@ -139,7 +127,6 @@ docker run --rm -it \
 ```bash
 docker run --rm -it \
   -p 12843:12843 \
-  -e BASE_URL=https://api.example.com \
   -e STORAGE_BACKEND=s3 \
   -e S3_ENDPOINT=https://<endpoint> \
   -e S3_REGION=auto \
@@ -151,6 +138,48 @@ docker run --rm -it \
   -v keer-data:/data \
   keer:local
 ```
+
+### 使用 Docker Compose 部署
+
+可以在项目目录旁创建 `compose.yaml`：
+
+```yaml
+services:
+  keer:
+    image: ghcr.io/shinyes/keer:v3.1.0
+    container_name: keer
+    restart: unless-stopped
+    ports:
+      - "12843:12843"
+    environment:
+      STORAGE_BACKEND: local
+      JWT_SECRET: replace-with-a-long-random-secret
+    volumes:
+      - ./keer-data:/data
+
+volumes:
+  keer-data:
+```
+
+启动：
+
+```bash
+docker compose up -d
+```
+
+查看日志：
+
+```bash
+docker compose logs -f keer
+```
+
+停止并删除容器：
+
+```bash
+docker compose down
+```
+
+如果你要改成 S3 模式，只需要把 `STORAGE_BACKEND` 改为 `s3`，并补上 `S3_ENDPOINT`、`S3_REGION`、`S3_BUCKET`、`S3_ACCESS_KEY_ID`、`S3_ACCESS_KEY_SECRET`、`S3_USE_PATH_STYLE` 这些环境变量。
 
 镜像默认：
 
@@ -178,6 +207,7 @@ exit
 说明：
 
 - `token create` 默认 `--ttl 7d`
+- 如果你需要固定的 Personal Access Token，请在服务启动后通过运行时控制台执行 `token create`
 - `registration enable/disable` 会立即影响 `POST /api/v1/users`
 - 存储后端不再支持运行时控制台修改，必须通过环境变量设置并重启服务
 

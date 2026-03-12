@@ -88,6 +88,8 @@ func toAPIGroup(group service.GroupWithMembers) apiGroup {
 		Creator:     "users/" + models.Int64ToString(group.Group.CreatorID),
 		CreateTime:  formatMaybeTime(group.Group.CreateTime),
 		UpdateTime:  formatMaybeTime(group.Group.UpdateTime),
+		Type:        string(group.Group.Type),
+		HasUnread:   group.Group.HasUnread,
 		GroupName:   group.Group.GroupName,
 		Description: group.Group.Description,
 		Members:     members,
@@ -360,6 +362,18 @@ func parseID(raw string) (int64, error) {
 		return 0, fmt.Errorf("empty id")
 	}
 	return strconv.ParseInt(raw, 10, 64)
+}
+
+func parseMessageResourceID(raw string) (int64, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, fmt.Errorf("empty id")
+	}
+	raw = strings.Trim(raw, "/")
+	if idx := strings.LastIndex(raw, "/"); idx >= 0 {
+		raw = raw[idx+1:]
+	}
+	return parseID(raw)
 }
 
 func parseRequiredIDParam(c *fiber.Ctx, param string, invalidMessage string) (int64, error) {

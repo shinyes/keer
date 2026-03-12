@@ -47,6 +47,8 @@ var (
 	ErrTokenAlreadyRevoked   = errors.New("access token already revoked")
 	ErrInvalidTokenExpiry    = errors.New("invalid token expiry")
 	ErrRegistrationDisabled  = errors.New("registration is disabled")
+	ErrCannotFriendSelf      = errors.New("cannot add yourself as a friend")
+	ErrFriendNotFound        = errors.New("friend not found")
 	usernamePattern          = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{2,31}$`)
 )
 
@@ -231,6 +233,47 @@ func (s *UserService) ListUserChanges(
 	}, nil
 }
 
+func (s *UserService) ListFriends(ctx context.Context, userID int64) ([]models.User, error) {
+	return s.store.ListFriends(ctx, userID)
+}
+
+func (s *UserService) AddFriend(ctx context.Context, userID int64, identifier string) (models.User, error) {
+	friend, err := s.GetUserByIdentifier(ctx, identifier)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return models.User{}, ErrFriendNotFound
+		}
+		return models.User{}, err
+	}
+	if friend.ID == userID {
+		return models.User{}, ErrCannotFriendSelf
+	}
+	if err := s.store.AddFriend(ctx, userID, friend.ID); err != nil {
+		return models.User{}, err
+	}
+	return friend, nil
+}
+
+func (s *UserService) RemoveFriend(ctx context.Context, userID int64, identifier string) error {
+	friend, err := s.GetUserByIdentifier(ctx, identifier)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrFriendNotFound
+		}
+		return err
+	}
+	if friend.ID == userID {
+		return ErrCannotFriendSelf
+	}
+	if err := s.store.RemoveFriend(ctx, userID, friend.ID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrFriendNotFound
+		}
+		return err
+	}
+	return nil
+}
+
 func (s *UserService) UpdateUserAvatar(ctx context.Context, userID int64, avatarURL string) (models.User, error) {
 	return s.withUserAvatarLock(userID, func() (models.User, error) {
 		return s.store.UpdateUserAvatar(ctx, userID, strings.TrimSpace(avatarURL))
@@ -303,36 +346,6 @@ func (s *UserService) AuthenticateToken(ctx context.Context, rawToken string) (m
 	}
 	_ = s.store.TouchPersonalAccessToken(ctx, token.ID)
 	return user, nil
-}
-
-func (s *UserService) EnsureBootstrap(ctx context.Context, username string, rawToken string) error {
-	username = normalizeUsername(username)
-	rawToken = strings.TrimSpace(rawToken)
-	if username == "" || rawToken == "" {
-		return nil
-	}
-
-	user, err := s.store.GetUserByUsername(ctx, username)
-	if err != nil {
-		if !errors.Is(err, sql.ErrNoRows) {
-			return err
-		}
-		user, err = s.store.CreateUser(ctx, username, username, "HOST")
-		if err != nil {
-			return fmt.Errorf("create bootstrap user: %w", err)
-		}
-	}
-
-	if _, _, err := s.store.GetUserByToken(ctx, rawToken); err == nil {
-		return nil
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		return err
-	}
-
-	if _, err := s.store.CreatePersonalAccessToken(ctx, user.ID, rawToken, "bootstrap token"); err != nil {
-		return fmt.Errorf("create bootstrap token: %w", err)
-	}
-	return nil
 }
 
 func (s *UserService) CreateUser(ctx context.Context, creator *models.User, input CreateUserInput, allowRegistration bool) (models.User, error) {

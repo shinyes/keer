@@ -45,10 +45,6 @@ func Build(ctx context.Context, cfg config.Config) (*Container, func() error, er
 	}
 	userService := service.NewUserService(sqlStore)
 	userService.ConfigureAuth(cfg.JWTSecret, cfg.AccessTokenTTL, cfg.RefreshTokenTTL)
-	if err := userService.EnsureBootstrap(ctx, cfg.BootstrapUser, cfg.BootstrapToken); err != nil {
-		_ = cleanup()
-		return nil, nil, fmt.Errorf("bootstrap setup: %w", err)
-	}
 
 	memoService := service.NewMemoService(sqlStore)
 	groupService := service.NewGroupService(sqlStore)

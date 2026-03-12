@@ -56,9 +56,6 @@ func runServe(args []string) {
 	defer cleanup() //nolint:errcheck
 
 	log.Printf("keer backend listening on %s (storage=%s)", container.Config.Addr, container.Config.Storage)
-	if cfg.BootstrapToken != "" {
-		log.Printf("bootstrap token enabled for user=%s", cfg.BootstrapUser)
-	}
 	if *consoleMode {
 		log.Printf("runtime admin console enabled")
 		go runRuntimeConsole(cfg, container.UserService)

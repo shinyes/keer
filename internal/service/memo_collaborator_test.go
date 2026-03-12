@@ -16,6 +16,7 @@ func TestCollaboratorCanManageMemo(t *testing.T) {
 	ctx := context.Background()
 	owner := mustCreateUser(t, services.store, "memo-collab-owner")
 	collaborator := mustCreateUser(t, services.store, "memo-collab-editor")
+	mustAddFriend(t, services.store, owner.ID, collaborator.ID)
 
 	collaboratorTag := fmt.Sprintf("collab/%d", collaborator.ID)
 	created, err := services.memoService.CreateMemo(ctx, owner.ID, CreateMemoInput{
@@ -56,6 +57,7 @@ func TestCollaboratorCanSeePrivateMemo(t *testing.T) {
 	owner := mustCreateUser(t, services.store, "memo-collab-visible-owner")
 	collaborator := mustCreateUser(t, services.store, "memo-collab-visible-member")
 	outsider := mustCreateUser(t, services.store, "memo-collab-visible-outsider")
+	mustAddFriend(t, services.store, owner.ID, collaborator.ID)
 
 	collaboratorTag := fmt.Sprintf("collab/%d", collaborator.ID)
 	created, err := services.memoService.CreateMemo(ctx, owner.ID, CreateMemoInput{
@@ -82,5 +84,23 @@ func TestCollaboratorCanSeePrivateMemo(t *testing.T) {
 	}
 	if len(outsiderView) != 0 {
 		t.Fatalf("expected outsider cannot see private collab memo, got %d", len(outsiderView))
+	}
+}
+
+func TestCollaboratorMustBeFriendOfMemoOwner(t *testing.T) {
+	t.Parallel()
+
+	services := setupTestServices(t)
+	ctx := context.Background()
+	owner := mustCreateUser(t, services.store, "memo-collab-restricted-owner")
+	nonFriend := mustCreateUser(t, services.store, "memo-collab-restricted-user")
+
+	collaboratorTag := fmt.Sprintf("collab/%d", nonFriend.ID)
+	if _, err := services.memoService.CreateMemo(ctx, owner.ID, CreateMemoInput{
+		Content:    "friend only memo",
+		Visibility: models.VisibilityPrivate,
+		Tags:       []string{collaboratorTag},
+	}); err == nil {
+		t.Fatalf("expected CreateMemo() to reject non-friend collaborator")
 	}
 }
