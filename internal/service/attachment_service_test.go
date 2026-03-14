@@ -48,8 +48,8 @@ func TestParseMemoID_CompatibilityFormats(t *testing.T) {
 }
 
 func TestBuildAttachmentStorageKey_Format(t *testing.T) {
-	key := buildAttachmentStorageKey(1, "a1B2cD3e", "16848.jpg")
-	if key != "attachments/1/a1B2cD3e_16848.jpg" {
+	key := buildAttachmentStorageKey(1, "a1B2cD3e")
+	if key != "attachments/1/a1B2cD3e.bin" {
 		t.Fatalf("unexpected key format: %s", key)
 	}
 }
@@ -79,7 +79,7 @@ func TestCreateAttachment_DeduplicateStorageSameContent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLocalStore() error = %v", err)
 	}
-	attachmentService := NewAttachmentService(services.store, localStore)
+	attachmentService := NewAttachmentService(services.store, storage.NewRouter(storage.TypeLocal, localStore))
 	user := mustCreateUser(t, services.store, "attach-dedupe")
 
 	content := base64.StdEncoding.EncodeToString([]byte("same-image-bytes"))
@@ -109,7 +109,7 @@ func TestCreateAttachment_DeduplicateStorageSameContent(t *testing.T) {
 	if !strings.HasPrefix(first.StorageKey, "attachments/") {
 		t.Fatalf("unexpected storage key prefix: %q", first.StorageKey)
 	}
-	if ok, _ := regexp.MatchString(`^attachments/\d+/[0-9A-Za-z]{8}_`, first.StorageKey); !ok {
+	if ok, _ := regexp.MatchString(`^attachments/\d+/[0-9A-Za-z]{8}\.bin$`, first.StorageKey); !ok {
 		t.Fatalf("unexpected storage key format: %q", first.StorageKey)
 	}
 	list, err := services.store.ListAttachmentsByCreator(context.Background(), user.ID)
@@ -127,7 +127,7 @@ func TestCreateAttachment_DedupStorageForDifferentFilename(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLocalStore() error = %v", err)
 	}
-	attachmentService := NewAttachmentService(services.store, localStore)
+	attachmentService := NewAttachmentService(services.store, storage.NewRouter(storage.TypeLocal, localStore))
 	user := mustCreateUser(t, services.store, "attach-no-dedupe")
 
 	content := base64.StdEncoding.EncodeToString([]byte("same-image-bytes"))
@@ -169,7 +169,7 @@ func TestDeleteAttachment_KeepFileWhenSharedStorageKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLocalStore() error = %v", err)
 	}
-	attachmentService := NewAttachmentService(services.store, localStore)
+	attachmentService := NewAttachmentService(services.store, storage.NewRouter(storage.TypeLocal, localStore))
 	user := mustCreateUser(t, services.store, "attach-delete-shared")
 
 	content := base64.StdEncoding.EncodeToString([]byte("same-image-bytes"))
@@ -218,7 +218,7 @@ func TestCreateAttachment_GeneratesThumbnailForImage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLocalStore() error = %v", err)
 	}
-	attachmentService := NewAttachmentService(services.store, localStore)
+	attachmentService := NewAttachmentService(services.store, storage.NewRouter(storage.TypeLocal, localStore))
 	user := mustCreateUser(t, services.store, "attach-thumbnail-image")
 
 	content := base64.StdEncoding.EncodeToString(generateTestJPEGBytes(t, 1200, 900))
@@ -247,7 +247,7 @@ func TestCreateAttachment_DoesNotGenerateThumbnailForNonImage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLocalStore() error = %v", err)
 	}
-	attachmentService := NewAttachmentService(services.store, localStore)
+	attachmentService := NewAttachmentService(services.store, storage.NewRouter(storage.TypeLocal, localStore))
 	user := mustCreateUser(t, services.store, "attach-thumbnail-text")
 
 	content := base64.StdEncoding.EncodeToString([]byte("plain text data"))
@@ -270,7 +270,7 @@ func TestCompleteAttachmentUploadSession_UsesClientProvidedThumbnail(t *testing.
 	if err != nil {
 		t.Fatalf("NewLocalStore() error = %v", err)
 	}
-	attachmentService := NewAttachmentService(services.store, localStore)
+	attachmentService := NewAttachmentService(services.store, storage.NewRouter(storage.TypeLocal, localStore))
 	user := mustCreateUser(t, services.store, "attach-upload-thumbnail-video")
 
 	videoData := []byte("video binary data")

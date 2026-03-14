@@ -17,9 +17,10 @@ func (s *SQLStore) CreateUserWithProfile(ctx context.Context, username string, p
 	now := time.Now().UTC()
 	res, err := s.db.ExecContext(
 		ctx,
-		`INSERT INTO users (username, avatar_url, password_hash, role, default_visibility, create_time, update_time)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO users (username, avatar_url, avatar_storage_type, password_hash, role, default_visibility, create_time, update_time)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		username,
+		"",
 		"",
 		passwordHash,
 		role,
@@ -44,7 +45,7 @@ func (s *SQLStore) GetUserByID(ctx context.Context, id int64) (models.User, erro
 	var updateTime string
 	err := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, username, avatar_url, password_hash, role, default_visibility, create_time, update_time
+		`SELECT id, username, avatar_url, avatar_storage_type, password_hash, role, default_visibility, create_time, update_time
 		FROM users
 		WHERE id = ?`,
 		id,
@@ -52,6 +53,7 @@ func (s *SQLStore) GetUserByID(ctx context.Context, id int64) (models.User, erro
 		&user.ID,
 		&user.Username,
 		&user.AvatarURL,
+		&user.AvatarStorageType,
 		&user.PasswordHash,
 		&user.Role,
 		&defaultVisibility,
@@ -80,7 +82,7 @@ func (s *SQLStore) GetUserByUsername(ctx context.Context, username string) (mode
 	var updateTime string
 	err := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, username, avatar_url, password_hash, role, default_visibility, create_time, update_time
+		`SELECT id, username, avatar_url, avatar_storage_type, password_hash, role, default_visibility, create_time, update_time
 		FROM users
 		WHERE username = ? COLLATE NOCASE`,
 		username,
@@ -88,6 +90,7 @@ func (s *SQLStore) GetUserByUsername(ctx context.Context, username string) (mode
 		&user.ID,
 		&user.Username,
 		&user.AvatarURL,
+		&user.AvatarStorageType,
 		&user.PasswordHash,
 		&user.Role,
 		&defaultVisibility,
@@ -166,7 +169,7 @@ func (s *SQLStore) ListUsersByIdentifiersUpdatedWithin(
 		return []models.User{}, nil
 	}
 
-	query := `SELECT id, username, avatar_url, password_hash, role, default_visibility, create_time, update_time
+	query := `SELECT id, username, avatar_url, avatar_storage_type, password_hash, role, default_visibility, create_time, update_time
 		FROM users
 		WHERE (`
 	args := make([]any, 0, len(userIDs)+len(usernames)+2)
@@ -211,6 +214,7 @@ func (s *SQLStore) ListUsersByIdentifiersUpdatedWithin(
 			&user.ID,
 			&user.Username,
 			&user.AvatarURL,
+			&user.AvatarStorageType,
 			&user.PasswordHash,
 			&user.Role,
 			&defaultVisibility,
@@ -412,7 +416,7 @@ func (s *SQLStore) GetUserByToken(ctx context.Context, rawToken string) (models.
 	err := s.db.QueryRowContext(
 		ctx,
 		`SELECT
-			u.id, u.username, u.avatar_url, u.password_hash, u.role, u.default_visibility, u.create_time, u.update_time,
+			u.id, u.username, u.avatar_url, u.avatar_storage_type, u.password_hash, u.role, u.default_visibility, u.create_time, u.update_time,
 			t.id, t.user_id, t.token_prefix, t.token_hash, t.description, t.created_at, t.last_used_at, t.expires_at, t.revoked_at
 		FROM personal_access_tokens t
 		JOIN users u ON u.id = t.user_id
@@ -425,6 +429,7 @@ func (s *SQLStore) GetUserByToken(ctx context.Context, rawToken string) (models.
 		&user.ID,
 		&user.Username,
 		&user.AvatarURL,
+		&user.AvatarStorageType,
 		&user.PasswordHash,
 		&user.Role,
 		&defaultVisibility,
@@ -473,13 +478,105 @@ func (s *SQLStore) GetUserByToken(ctx context.Context, rawToken string) (models.
 	return user, token, nil
 }
 
-func (s *SQLStore) UpdateUserAvatar(ctx context.Context, userID int64, avatarURL string) (models.User, error) {
+func (s *SQLStore) UpdateUserAvatar(
+	ctx context.Context,
+	userID int64,
+	avatarURL string,
+	avatarStorageType string,
+) (models.User, error) {
 	_, err := s.db.ExecContext(
 		ctx,
 		`UPDATE users
-		SET avatar_url = ?, update_time = ?
+		SET avatar_url = ?, avatar_storage_type = ?, update_time = ?
 		WHERE id = ?`,
 		avatarURL,
+		avatarStorageType,
+		time.Now().UTC().Format(time.RFC3339Nano),
+		userID,
+	)
+	if err != nil {
+		return models.User{}, err
+	}
+	return s.GetUserByID(ctx, userID)
+}
+
+func (s *SQLStore) PromoteUsersToAdminByUsername(ctx context.Context, usernames []string) error {
+	if len(usernames) == 0 {
+		return nil
+	}
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(usernames)), ",")
+	args := make([]any, 0, len(usernames)+1)
+	args = append(args, time.Now().UTC().Format(time.RFC3339Nano))
+	for _, username := range usernames {
+		args = append(args, username)
+	}
+	_, err := s.db.ExecContext(
+		ctx,
+		`UPDATE users
+		SET role = 'ADMIN', update_time = ?
+		WHERE username COLLATE NOCASE IN (`+placeholders+`)`,
+		args...,
+	)
+	return err
+}
+
+func (s *SQLStore) ListUserAvatarStorageRefs(ctx context.Context) ([]models.User, error) {
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT id, username, avatar_url, avatar_storage_type, password_hash, role, default_visibility, create_time, update_time
+		FROM users
+		WHERE avatar_url <> ''`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make([]models.User, 0)
+	for rows.Next() {
+		var user models.User
+		var defaultVisibility string
+		var createTime string
+		var updateTime string
+		if err := rows.Scan(
+			&user.ID,
+			&user.Username,
+			&user.AvatarURL,
+			&user.AvatarStorageType,
+			&user.PasswordHash,
+			&user.Role,
+			&defaultVisibility,
+			&createTime,
+			&updateTime,
+		); err != nil {
+			return nil, err
+		}
+		user.DefaultVisibility = models.Visibility(defaultVisibility)
+		var err error
+		user.CreateTime, err = parseTime(createTime)
+		if err != nil {
+			return nil, err
+		}
+		user.UpdateTime, err = parseTime(updateTime)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, user)
+	}
+	return result, rows.Err()
+}
+
+func (s *SQLStore) UpdateUserDefaultVisibility(
+	ctx context.Context,
+	userID int64,
+	visibility models.Visibility,
+) (models.User, error) {
+	_, err := s.db.ExecContext(
+		ctx,
+		`UPDATE users
+		SET default_visibility = ?, update_time = ?
+		WHERE id = ?`,
+		visibility,
 		time.Now().UTC().Format(time.RFC3339Nano),
 		userID,
 	)

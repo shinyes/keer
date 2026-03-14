@@ -44,11 +44,45 @@ type User struct {
 	ID                int64
 	Username          string
 	AvatarURL         string
+	AvatarStorageType string
 	PasswordHash      string
 	Role              string
 	DefaultVisibility Visibility
 	CreateTime        time.Time
 	UpdateTime        time.Time
+}
+
+type MemoEditGesture string
+
+const (
+	MemoEditGestureNone   MemoEditGesture = "NONE"
+	MemoEditGestureSingle MemoEditGesture = "SINGLE"
+	MemoEditGestureDouble MemoEditGesture = "DOUBLE"
+	MemoEditGestureLong   MemoEditGesture = "LONG"
+)
+
+func (g MemoEditGesture) IsValid() bool {
+	return g == MemoEditGestureNone ||
+		g == MemoEditGestureSingle ||
+		g == MemoEditGestureDouble ||
+		g == MemoEditGestureLong
+}
+
+type MemoColumnConfig struct {
+	ID              string
+	Name            string
+	RequiredTags    []string
+	VisibleInDrawer bool
+	PinnedMemoNames []string
+}
+
+type UserGeneralSettings struct {
+	UserID          int64
+	MemoVisibility  Visibility
+	MemoEditGesture MemoEditGesture
+	MemoColumns     []MemoColumnConfig
+	CreateTime      time.Time
+	UpdateTime      time.Time
 }
 
 type UserEncryptionKey struct {

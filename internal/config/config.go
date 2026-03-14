@@ -29,9 +29,9 @@ type Config struct {
 	DBPath            string
 	UploadsDir        string
 	BodyLimitMB       int
-	KeerAPIVersion    string
 	Storage           StorageBackend
 	S3                S3Config
+	AdminUsers        []string
 	AllowRegistration bool
 	JWTSecret         string
 	AccessTokenTTL    time.Duration
@@ -44,7 +44,6 @@ func Load() (Config, error) {
 		DBPath:         env("DB_PATH", "./data/keer.db"),
 		UploadsDir:     env("UPLOADS_DIR", "./data/uploads"),
 		BodyLimitMB:    envInt("HTTP_BODY_LIMIT_MB", 64),
-		KeerAPIVersion: env("KEER_API_VERSION", "0.1"),
 		Storage:        envStorageBackend("STORAGE_BACKEND", StorageBackendLocal),
 		S3: S3Config{
 			Endpoint:     env("S3_ENDPOINT", ""),
@@ -54,6 +53,7 @@ func Load() (Config, error) {
 			AccessSecret: env("S3_ACCESS_KEY_SECRET", ""),
 			UsePathStyle: envBool("S3_USE_PATH_STYLE", true),
 		},
+		AdminUsers:        envCSV("ADMIN_USERS"),
 		AllowRegistration: envBool("ALLOW_REGISTRATION", true),
 		JWTSecret:         env("JWT_SECRET", "change-me-in-production"),
 		AccessTokenTTL:    envDuration("ACCESS_TOKEN_TTL", 15*time.Minute),
@@ -145,4 +145,26 @@ func envStorageBackend(key string, fallback StorageBackend) StorageBackend {
 		return fallback
 	}
 	return StorageBackend(v)
+}
+
+func envCSV(key string) []string {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return []string{}
+	}
+	parts := strings.Split(raw, ",")
+	result := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+	for _, part := range parts {
+		value := strings.TrimSpace(part)
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
 }

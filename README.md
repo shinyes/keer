@@ -83,7 +83,6 @@ go run ./cmd/server
 | `DB_PATH` | `./data/keer.db` | SQLite 数据库路径 |
 | `UPLOADS_DIR` | `./data/uploads` | 本地文件存储目录，仅 `local` 模式生效 |
 | `HTTP_BODY_LIMIT_MB` | `64` | HTTP 请求体上限（MiB） |
-| `KEER_API_VERSION` | `0.1` | `/api/v1/instance/profile` 返回的 API 版本 |
 | `ALLOW_REGISTRATION` | `true` | 是否允许公开注册 |
 | `JWT_SECRET` | `change-me-in-production` | JWT 签名密钥，生产环境必须覆盖 |
 | `ACCESS_TOKEN_TTL` | `15m` | Access Token 有效期 |
@@ -288,7 +287,6 @@ Authorization: Bearer <accessToken>
 
 公开接口：
 
-- `GET /api/v1/instance/profile`
 - `POST /api/v1/auth/signin`
 - `POST /api/v1/auth/refresh`
 - `POST /api/v1/users`

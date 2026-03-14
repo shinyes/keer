@@ -326,7 +326,29 @@ type userSettingResponse struct {
 }
 
 type generalSetting struct {
-	MemoVisibility string `json:"memoVisibility,omitempty"`
+	MemoVisibility  string                `json:"memoVisibility,omitempty"`
+	MemoEditGesture string                `json:"memoEditGesture,omitempty"`
+	MemoColumns     []apiMemoColumnConfig `json:"memoColumns,omitempty"`
+	Locale          string                `json:"locale,omitempty"`
+	Theme           string                `json:"theme,omitempty"`
+}
+
+type apiMemoColumnConfig struct {
+	ID              string   `json:"id"`
+	Name            string   `json:"name"`
+	RequiredTags    []string `json:"requiredTags"`
+	VisibleInDrawer bool     `json:"visibleInDrawer"`
+	PinnedMemoNames []string `json:"pinnedMemoNames"`
+}
+
+type updateUserGeneralSettingRequest struct {
+	GeneralSetting updateUserGeneralSetting `json:"generalSetting"`
+}
+
+type updateUserGeneralSetting struct {
+	MemoVisibility  string                `json:"memoVisibility"`
+	MemoEditGesture string                `json:"memoEditGesture"`
+	MemoColumns     []apiMemoColumnConfig `json:"memoColumns"`
 }
 
 type userEncryptionSettingResponse struct {
@@ -409,8 +431,14 @@ type userStatsResponse struct {
 	TagCount map[string]int `json:"tagCount"`
 }
 
-type profileResponse struct {
-	KeerAPIVersion string `json:"keer_api_version"`
+type storageCleanupResponse struct {
+	Cleanup storageCleanupResult `json:"cleanup"`
+}
+
+type storageCleanupResult struct {
+	ScannedKeys int `json:"scannedKeys"`
+	DeletedKeys int `json:"deletedKeys"`
+	FailedKeys  int `json:"failedKeys"`
 }
 
 type optionalFloat64 struct {

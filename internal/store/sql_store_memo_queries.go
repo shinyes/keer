@@ -1075,6 +1075,29 @@ func (s *SQLStore) ListAttachmentsByCreator(ctx context.Context, creatorID int64
 	return result, rows.Err()
 }
 
+func (s *SQLStore) ListAllAttachments(ctx context.Context) ([]models.Attachment, error) {
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT id, creator_id, filename, external_link, type, size, encryption_metadata, storage_type, storage_key, thumbnail_filename, thumbnail_type, thumbnail_size, thumbnail_storage_type, thumbnail_storage_key, create_time
+		FROM attachments
+		ORDER BY id DESC`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make([]models.Attachment, 0)
+	for rows.Next() {
+		attachment, err := scanAttachment(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, attachment)
+	}
+	return result, rows.Err()
+}
+
 func (s *SQLStore) DeleteAttachment(ctx context.Context, attachmentID int64) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM attachments WHERE id = ?`, attachmentID)
 	return err

@@ -135,6 +135,33 @@ func (s *S3Store) Delete(ctx context.Context, key string) error {
 	return nil
 }
 
+func (s *S3Store) ListKeys(ctx context.Context, prefix string) ([]string, error) {
+	paginator := s3.NewListObjectsV2Paginator(s.client, &s3.ListObjectsV2Input{
+		Bucket: aws.String(s.bucket),
+		Prefix: aws.String(strings.TrimSpace(prefix)),
+	})
+	keys := make([]string, 0)
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("list s3 objects: %w", err)
+		}
+		for _, object := range page.Contents {
+			key := strings.TrimSpace(aws.ToString(object.Key))
+			if key == "" {
+				continue
+			}
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	return keys, nil
+}
+
+func (s *S3Store) Type() string {
+	return TypeS3
+}
+
 func (s *S3Store) HeadSize(ctx context.Context, key string) (int64, error) {
 	output, err := s.client.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket: aws.String(s.bucket),

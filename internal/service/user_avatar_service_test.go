@@ -10,6 +10,7 @@ import (
 	"image/png"
 	"io"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/shinyes/keer/internal/storage"
@@ -65,13 +66,27 @@ func (s *memoryAvatarStore) Delete(_ context.Context, key string) error {
 	return nil
 }
 
+func (s *memoryAvatarStore) ListKeys(_ context.Context, prefix string) ([]string, error) {
+	keys := make([]string, 0, len(s.objects))
+	for key := range s.objects {
+		if prefix == "" || strings.HasPrefix(key, prefix) {
+			keys = append(keys, key)
+		}
+	}
+	return keys, nil
+}
+
+func (s *memoryAvatarStore) Type() string {
+	return storage.TypeLocal
+}
+
 var _ storage.Store = (*memoryAvatarStore)(nil)
 
 func TestUpdateUserAvatarThumbnail_StoresAvatarToDedicatedPath(t *testing.T) {
 	services := setupTestServices(t)
 	userService := NewUserService(services.store)
 	avatarStore := newMemoryAvatarStore()
-	userService.SetAvatarStorage(avatarStore)
+	userService.SetAvatarStorageRouter(storage.NewRouter(storage.TypeLocal, avatarStore))
 	ctx := context.Background()
 
 	user, err := services.store.CreateUser(ctx, "avatarcase01", "USER")
@@ -99,7 +114,7 @@ func TestUpdateUserAvatarThumbnail_WriteFailureDoesNotUpdateAvatarURL(t *testing
 	userService := NewUserService(services.store)
 	avatarStore := newMemoryAvatarStore()
 	avatarStore.putErr = errors.New("disk full")
-	userService.SetAvatarStorage(avatarStore)
+	userService.SetAvatarStorageRouter(storage.NewRouter(storage.TypeLocal, avatarStore))
 	ctx := context.Background()
 
 	user, err := services.store.CreateUser(ctx, "avatarcase02", "USER")
@@ -125,7 +140,7 @@ func TestUpdateUserAvatarThumbnail_RejectsLargeDimensions(t *testing.T) {
 	services := setupTestServices(t)
 	userService := NewUserService(services.store)
 	avatarStore := newMemoryAvatarStore()
-	userService.SetAvatarStorage(avatarStore)
+	userService.SetAvatarStorageRouter(storage.NewRouter(storage.TypeLocal, avatarStore))
 	ctx := context.Background()
 
 	user, err := services.store.CreateUser(ctx, "avatarcase03", "USER")
@@ -146,14 +161,14 @@ func TestClearUserAvatar_DeleteFailureDoesNotUpdateAvatarURL(t *testing.T) {
 	services := setupTestServices(t)
 	userService := NewUserService(services.store)
 	avatarStore := newMemoryAvatarStore()
-	userService.SetAvatarStorage(avatarStore)
+	userService.SetAvatarStorageRouter(storage.NewRouter(storage.TypeLocal, avatarStore))
 	ctx := context.Background()
 
 	user, err := services.store.CreateUser(ctx, "avatarcase04", "USER")
 	if err != nil {
 		t.Fatalf("CreateUser() error = %v", err)
 	}
-	if _, err := services.store.UpdateUserAvatar(ctx, user.ID, avatarPublicURL(user.ID)); err != nil {
+	if _, err := services.store.UpdateUserAvatar(ctx, user.ID, avatarPublicURL(user.ID), storage.TypeLocal); err != nil {
 		t.Fatalf("UpdateUserAvatar() error = %v", err)
 	}
 	avatarStore.deleteErr = errors.New("delete failed")

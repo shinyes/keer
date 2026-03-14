@@ -454,10 +454,9 @@ func newTestAppWithUserService(t *testing.T, allowRegistration bool, withAuthFix
 	if err != nil {
 		t.Fatalf("NewLocalStore() error = %v", err)
 	}
-	attachmentService := service.NewAttachmentService(sqlStore, localStore)
+	attachmentService := service.NewAttachmentService(sqlStore, storage.NewRouter(storage.TypeLocal, localStore))
 
 	cfg := config.Config{
-		KeerAPIVersion:    "0.1",
 		AllowRegistration: allowRegistration,
 	}
 	return NewRouter(cfg, userService, memoService, groupService, attachmentService), userService

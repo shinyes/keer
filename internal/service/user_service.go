@@ -27,7 +27,7 @@ import (
 
 type UserService struct {
 	store           *store.SQLStore
-	avatarStorage   storage.Store
+	avatarStorage   *storage.Router
 	avatarLocks     sync.Map
 	jwtSecret       []byte
 	accessTokenTTL  time.Duration
@@ -39,6 +39,7 @@ var (
 	ErrInvalidPassword        = errors.New("invalid password")
 	ErrInvalidCurrentPassword = errors.New("invalid current password")
 	ErrInvalidEncryptionKey   = errors.New("invalid encryption key")
+	ErrInvalidGeneralSetting  = errors.New("invalid general setting")
 	ErrInvalidCredentials     = errors.New("invalid credentials")
 	ErrInvalidRefreshToken    = errors.New("invalid refresh token")
 	ErrInvalidRole            = errors.New("invalid role")
@@ -89,6 +90,12 @@ type UpsertUserEncryptionKeyInput struct {
 	Algorithms               string
 }
 
+type UpdateUserGeneralSettingsInput struct {
+	MemoVisibility  string
+	MemoEditGesture string
+	MemoColumns     []models.MemoColumnConfig
+}
+
 func NewUserService(s *store.SQLStore) *UserService {
 	return &UserService{
 		store:           s,
@@ -98,8 +105,8 @@ func NewUserService(s *store.SQLStore) *UserService {
 	}
 }
 
-func (s *UserService) SetAvatarStorage(store storage.Store) {
-	s.avatarStorage = store
+func (s *UserService) SetAvatarStorageRouter(router *storage.Router) {
+	s.avatarStorage = router
 }
 
 func (s *UserService) GetUserEncryptionKey(ctx context.Context, userID int64) (models.UserEncryptionKey, error) {
@@ -207,6 +214,99 @@ func (s *UserService) ChangePassword(
 	}
 
 	return s.store.UpdateUserPasswordHashAndEncryptionKey(ctx, userID, string(passwordHash), encryptionKey)
+}
+
+func (s *UserService) GetUserGeneralSettings(ctx context.Context, userID int64) (models.UserGeneralSettings, error) {
+	return s.store.GetUserGeneralSettings(ctx, userID)
+}
+
+func (s *UserService) UpdateUserGeneralSettings(
+	ctx context.Context,
+	userID int64,
+	input UpdateUserGeneralSettingsInput,
+) (models.UserGeneralSettings, error) {
+	settings, err := normalizeUserGeneralSettingsInput(userID, input)
+	if err != nil {
+		return models.UserGeneralSettings{}, err
+	}
+	return s.store.UpdateUserGeneralSettings(ctx, settings)
+}
+
+func normalizeUserGeneralSettingsInput(
+	userID int64,
+	input UpdateUserGeneralSettingsInput,
+) (models.UserGeneralSettings, error) {
+	if userID <= 0 {
+		return models.UserGeneralSettings{}, ErrInvalidGeneralSetting
+	}
+
+	visibility := models.Visibility(strings.TrimSpace(input.MemoVisibility))
+	gesture := models.MemoEditGesture(strings.TrimSpace(input.MemoEditGesture))
+	if !visibility.IsValid() || !gesture.IsValid() {
+		return models.UserGeneralSettings{}, ErrInvalidGeneralSetting
+	}
+
+	columns := make([]models.MemoColumnConfig, 0, len(input.MemoColumns))
+	seenIDs := make(map[string]struct{}, len(input.MemoColumns))
+	for _, column := range input.MemoColumns {
+		id := strings.TrimSpace(column.ID)
+		name := strings.TrimSpace(column.Name)
+		if id == "" || name == "" {
+			return models.UserGeneralSettings{}, ErrInvalidGeneralSetting
+		}
+		if _, exists := seenIDs[id]; exists {
+			return models.UserGeneralSettings{}, ErrInvalidGeneralSetting
+		}
+		seenIDs[id] = struct{}{}
+		columns = append(columns, models.MemoColumnConfig{
+			ID:              id,
+			Name:            name,
+			RequiredTags:    normalizeMemoColumnTags(column.RequiredTags),
+			VisibleInDrawer: column.VisibleInDrawer,
+			PinnedMemoNames: normalizeMemoColumnMemoNames(column.PinnedMemoNames),
+		})
+	}
+
+	return models.UserGeneralSettings{
+		UserID:          userID,
+		MemoVisibility:  visibility,
+		MemoEditGesture: gesture,
+		MemoColumns:     columns,
+	}, nil
+}
+
+func normalizeMemoColumnTags(tags []string) []string {
+	normalized := make([]string, 0, len(tags))
+	seen := make(map[string]struct{}, len(tags))
+	for _, raw := range tags {
+		tag := strings.TrimSpace(raw)
+		if tag == "" {
+			continue
+		}
+		if _, exists := seen[tag]; exists {
+			continue
+		}
+		seen[tag] = struct{}{}
+		normalized = append(normalized, tag)
+	}
+	return normalized
+}
+
+func normalizeMemoColumnMemoNames(names []string) []string {
+	normalized := make([]string, 0, len(names))
+	seen := make(map[string]struct{}, len(names))
+	for _, raw := range names {
+		name := strings.TrimSpace(raw)
+		if name == "" {
+			continue
+		}
+		if _, exists := seen[name]; exists {
+			continue
+		}
+		seen[name] = struct{}{}
+		normalized = append(normalized, name)
+	}
+	return normalized
 }
 
 func (s *UserService) GetUser(ctx context.Context, userID int64) (models.User, error) {
@@ -337,13 +437,14 @@ func (s *UserService) RemoveFriend(ctx context.Context, userID int64, identifier
 
 func (s *UserService) UpdateUserAvatar(ctx context.Context, userID int64, avatarURL string) (models.User, error) {
 	return s.withUserAvatarLock(userID, func() (models.User, error) {
-		return s.store.UpdateUserAvatar(ctx, userID, strings.TrimSpace(avatarURL))
+		return s.store.UpdateUserAvatar(ctx, userID, strings.TrimSpace(avatarURL), "")
 	})
 }
 
 func (s *UserService) UpdateUserAvatarThumbnail(ctx context.Context, userID int64, contentBase64 string, declaredType string) (models.User, error) {
 	return s.withUserAvatarLock(userID, func() (models.User, error) {
-		if s.avatarStorage == nil {
+		store := s.defaultAvatarStore()
+		if store == nil {
 			return models.User{}, fmt.Errorf("avatar storage is not configured")
 		}
 		content, err := decodeBase64Payload(contentBase64)
@@ -359,33 +460,50 @@ func (s *UserService) UpdateUserAvatarThumbnail(ctx context.Context, userID int6
 			return models.User{}, fmt.Errorf("invalid avatar image")
 		}
 
-		if _, err := s.avatarStorage.Put(ctx, avatarStorageKey(userID), thumbnailContentType, thumbnailData); err != nil {
+		if _, err := store.Put(ctx, avatarStorageKey(userID), thumbnailContentType, thumbnailData); err != nil {
 			return models.User{}, fmt.Errorf("store avatar: %w", err)
 		}
-		return s.store.UpdateUserAvatar(ctx, userID, avatarPublicURL(userID))
+		return s.store.UpdateUserAvatar(ctx, userID, avatarPublicURL(userID), s.defaultAvatarStorageType())
 	})
 }
 
 func (s *UserService) ClearUserAvatar(ctx context.Context, userID int64) (models.User, error) {
 	return s.withUserAvatarLock(userID, func() (models.User, error) {
-		if s.avatarStorage != nil {
-			if err := s.avatarStorage.Delete(ctx, avatarStorageKey(userID)); err != nil {
+		user, err := s.store.GetUserByID(ctx, userID)
+		if err != nil {
+			return models.User{}, err
+		}
+		if store, ok := s.avatarStoreForType(user.AvatarStorageType); ok {
+			if err := store.Delete(ctx, avatarStorageKey(userID)); err != nil {
 				return models.User{}, fmt.Errorf("delete avatar: %w", err)
 			}
 		}
-		return s.store.UpdateUserAvatar(ctx, userID, "")
+		return s.store.UpdateUserAvatar(ctx, userID, "", "")
 	})
 }
 
 func (s *UserService) OpenUserAvatarStream(ctx context.Context, userID int64) (io.ReadCloser, error) {
-	if s.avatarStorage == nil {
+	user, err := s.store.GetUserByID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	store, ok := s.avatarStoreForType(user.AvatarStorageType)
+	if !ok {
 		return nil, fmt.Errorf("avatar storage is not configured")
 	}
-	return s.avatarStorage.Open(ctx, avatarStorageKey(userID))
+	return store.Open(ctx, avatarStorageKey(userID))
 }
 
 func (s *UserService) PresignUserAvatarURL(ctx context.Context, userID int64) (string, bool, error) {
-	s3Store, ok := s.avatarStorage.(*storage.S3Store)
+	user, err := s.store.GetUserByID(ctx, userID)
+	if err != nil {
+		return "", false, err
+	}
+	store, ok := s.avatarStoreForType(user.AvatarStorageType)
+	if !ok {
+		return "", false, nil
+	}
+	s3Store, ok := store.(*storage.S3Store)
 	if !ok {
 		return "", false, nil
 	}
@@ -714,4 +832,25 @@ func (s *UserService) withUserAvatarLock(userID int64, fn func() (models.User, e
 	lock.Lock()
 	defer lock.Unlock()
 	return fn()
+}
+
+func (s *UserService) defaultAvatarStore() storage.Store {
+	if s.avatarStorage == nil {
+		return nil
+	}
+	return s.avatarStorage.DefaultStore()
+}
+
+func (s *UserService) defaultAvatarStorageType() string {
+	if s.avatarStorage == nil {
+		return storage.TypeLocal
+	}
+	return s.avatarStorage.DefaultType()
+}
+
+func (s *UserService) avatarStoreForType(storeType string) (storage.Store, bool) {
+	if s.avatarStorage == nil {
+		return nil, false
+	}
+	return s.avatarStorage.StoreForType(storeType)
 }

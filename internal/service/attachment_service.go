@@ -23,9 +23,9 @@ import (
 )
 
 type AttachmentService struct {
-	store   *store.SQLStore
-	storage storage.Store
-	tempDir string
+	store         *store.SQLStore
+	storageRouter *storage.Router
+	tempDir       string
 }
 
 const (
@@ -42,12 +42,12 @@ const (
 	s3MultipartPartSizeBytes   = 8 * 1024 * 1024
 )
 
-func NewAttachmentService(s *store.SQLStore, fileStorage storage.Store) *AttachmentService {
+func NewAttachmentService(s *store.SQLStore, storageRouter *storage.Router) *AttachmentService {
 	tempDir := filepath.Join(os.TempDir(), "keer", "upload_sessions")
 	return &AttachmentService{
-		store:   s,
-		storage: fileStorage,
-		tempDir: tempDir,
+		store:         s,
+		storageRouter: storageRouter,
+		tempDir:       tempDir,
 	}
 }
 
@@ -72,6 +72,12 @@ type CreateAttachmentUploadSessionThumbnailInput struct {
 	Filename string
 	Type     string
 	Content  string
+}
+
+type StorageCleanupResult struct {
+	ScannedKeys int
+	DeletedKeys int
+	FailedKeys  int
 }
 
 var (
@@ -115,6 +121,10 @@ type multipartSessionInfo struct {
 }
 
 func (s *AttachmentService) CreateAttachment(ctx context.Context, userID int64, input CreateAttachmentInput) (models.Attachment, error) {
+	defaultStorage := s.defaultStorage()
+	if defaultStorage == nil {
+		return models.Attachment{}, fmt.Errorf("attachment storage is not configured")
+	}
 	filename := sanitizeFilename(input.Filename)
 	if filename == "" {
 		return models.Attachment{}, fmt.Errorf("filename cannot be empty")
@@ -161,7 +171,7 @@ func (s *AttachmentService) CreateAttachment(ctx context.Context, userID int64, 
 		if err != nil {
 			return models.Attachment{}, err
 		}
-		size, err = s.storage.Put(ctx, storageKey, contentType, data)
+		size, err = defaultStorage.Put(ctx, storageKey, contentType, data)
 		if err != nil {
 			return models.Attachment{}, err
 		}
@@ -177,12 +187,12 @@ func (s *AttachmentService) CreateAttachment(ctx context.Context, userID int64, 
 		size,
 		contentHash,
 		strings.TrimSpace(input.EncryptionMetadata),
-		storageTypeName(s.storage),
+		s.defaultStorageType(),
 		storageKey,
 	)
 	if err != nil {
 		if uploaded {
-			_ = s.storage.Delete(ctx, storageKey)
+			_ = defaultStorage.Delete(ctx, storageKey)
 		}
 		return models.Attachment{}, err
 	}
@@ -279,7 +289,7 @@ func (s *AttachmentService) CreateAttachmentUploadSession(ctx context.Context, u
 		}
 	}
 
-	if s3Store, ok := s.storage.(*storage.S3Store); ok {
+	if s3Store := s.defaultS3Store(); s3Store != nil {
 		storageKey, err := s.newAttachmentStorageKey(ctx, userID, filename)
 		if err != nil {
 			if thumbnailTempPath != "" {
@@ -389,11 +399,13 @@ func (s *AttachmentService) CleanupExpiredUploadSessions(ctx context.Context) er
 				continue
 			}
 			if multipart, ok := decodeMultipartSessionPath(session.TempPath); ok {
-				if s3Store, s3OK := s.storage.(*storage.S3Store); s3OK {
+				if s3Store := s.defaultS3Store(); s3Store != nil {
 					_ = s3Store.AbortMultipartUpload(ctx, multipart.StorageKey, multipart.MultipartUploadID)
 				}
 			} else if storageKey, direct := decodeDirectSessionPath(session.TempPath); direct {
-				_ = s.storage.Delete(ctx, storageKey)
+				if store := s.defaultStorage(); store != nil {
+					_ = store.Delete(ctx, storageKey)
+				}
 			} else {
 				_ = os.Remove(session.TempPath)
 			}
@@ -429,8 +441,8 @@ func (s *AttachmentService) GetDirectUploadSession(ctx context.Context, session 
 	if !ok {
 		return nil, nil
 	}
-	s3Store, ok := s.storage.(*storage.S3Store)
-	if !ok {
+	s3Store := s.defaultS3Store()
+	if s3Store == nil {
 		return nil, nil
 	}
 	uploadURL, err := s3Store.PresignPutObjectURL(ctx, storageKey, session.Type, directUploadURLTTL)
@@ -492,8 +504,8 @@ func (s *AttachmentService) CreateMultipartPartUploadURL(
 	if multipart.PartSize <= 0 {
 		return nil, ErrMultipartPartInvalid
 	}
-	s3Store, ok := s.storage.(*storage.S3Store)
-	if !ok {
+	s3Store := s.defaultS3Store()
+	if s3Store == nil {
 		return nil, fmt.Errorf("multipart upload session requires s3 storage")
 	}
 
@@ -542,10 +554,14 @@ func (s *AttachmentService) CreateMultipartPartUploadURL(
 }
 
 func (s *AttachmentService) PresignAttachmentURL(ctx context.Context, attachment models.Attachment) (string, bool, error) {
-	if !strings.EqualFold(strings.TrimSpace(attachment.StorageType), "S3") {
+	if !strings.EqualFold(strings.TrimSpace(attachment.StorageType), storage.TypeS3) {
 		return "", false, nil
 	}
-	s3Store, ok := s.storage.(*storage.S3Store)
+	store, err := s.storageForType(attachment.StorageType)
+	if err != nil {
+		return "", false, nil
+	}
+	s3Store, ok := store.(*storage.S3Store)
 	if !ok {
 		return "", false, nil
 	}
@@ -563,11 +579,18 @@ func (s *AttachmentService) PresignAttachmentThumbnailURL(ctx context.Context, a
 	if strings.TrimSpace(attachment.ThumbnailStorageKey) == "" {
 		return "", false, nil
 	}
-	if !strings.EqualFold(strings.TrimSpace(attachment.ThumbnailStorageType), "S3") &&
-		!strings.EqualFold(strings.TrimSpace(attachment.StorageType), "S3") {
+	thumbnailStorageType := attachment.ThumbnailStorageType
+	if strings.TrimSpace(thumbnailStorageType) == "" {
+		thumbnailStorageType = attachment.StorageType
+	}
+	if !strings.EqualFold(strings.TrimSpace(thumbnailStorageType), storage.TypeS3) {
 		return "", false, nil
 	}
-	s3Store, ok := s.storage.(*storage.S3Store)
+	store, err := s.storageForType(thumbnailStorageType)
+	if err != nil {
+		return "", false, nil
+	}
+	s3Store, ok := store.(*storage.S3Store)
 	if !ok {
 		return "", false, nil
 	}
@@ -634,11 +657,13 @@ func (s *AttachmentService) CancelAttachmentUploadSession(ctx context.Context, u
 		return err
 	}
 	if multipart, ok := decodeMultipartSessionPath(session.TempPath); ok {
-		if s3Store, s3OK := s.storage.(*storage.S3Store); s3OK {
+		if s3Store := s.defaultS3Store(); s3Store != nil {
 			_ = s3Store.AbortMultipartUpload(ctx, multipart.StorageKey, multipart.MultipartUploadID)
 		}
 	} else if storageKey, direct := decodeDirectSessionPath(session.TempPath); direct {
-		_ = s.storage.Delete(ctx, storageKey)
+		if store := s.defaultStorage(); store != nil {
+			_ = store.Delete(ctx, storageKey)
+		}
 	} else {
 		_ = os.Remove(session.TempPath)
 	}
@@ -710,7 +735,12 @@ func (s *AttachmentService) CompleteAttachmentUploadSession(ctx context.Context,
 		if err != nil {
 			return models.Attachment{}, fmt.Errorf("open upload temp file: %w", err)
 		}
-		size, uploadErr := s.storage.PutStream(ctx, storageKey, session.Type, file, session.Size)
+		defaultStorage := s.defaultStorage()
+		if defaultStorage == nil {
+			_ = file.Close()
+			return models.Attachment{}, fmt.Errorf("attachment storage is not configured")
+		}
+		size, uploadErr := defaultStorage.PutStream(ctx, storageKey, session.Type, file, session.Size)
 		_ = file.Close()
 		if uploadErr != nil {
 			return models.Attachment{}, uploadErr
@@ -724,11 +754,11 @@ func (s *AttachmentService) CompleteAttachmentUploadSession(ctx context.Context,
 			size,
 			contentHash,
 			session.EncryptionMetadata,
-			storageTypeName(s.storage),
+			s.defaultStorageType(),
 			storageKey,
 		)
 		if err != nil {
-			_ = s.storage.Delete(ctx, storageKey)
+			_ = defaultStorage.Delete(ctx, storageKey)
 			return models.Attachment{}, err
 		}
 		if session.ThumbnailTempPath != "" {
@@ -773,8 +803,8 @@ func (s *AttachmentService) completeDirectAttachmentUploadSession(
 	session models.AttachmentUploadSession,
 	storageKey string,
 ) (models.Attachment, error) {
-	s3Store, ok := s.storage.(*storage.S3Store)
-	if !ok {
+	s3Store := s.defaultS3Store()
+	if s3Store == nil {
 		return models.Attachment{}, fmt.Errorf("direct upload session requires s3 storage")
 	}
 
@@ -796,11 +826,11 @@ func (s *AttachmentService) completeDirectAttachmentUploadSession(
 		size,
 		contentHash,
 		session.EncryptionMetadata,
-		storageTypeName(s.storage),
+		s.defaultStorageType(),
 		storageKey,
 	)
 	if err != nil {
-		_ = s.storage.Delete(ctx, storageKey)
+		_ = s3Store.Delete(ctx, storageKey)
 		return models.Attachment{}, err
 	}
 	if session.ThumbnailTempPath != "" {
@@ -841,8 +871,8 @@ func (s *AttachmentService) completeMultipartAttachmentUploadSession(
 	session models.AttachmentUploadSession,
 	multipart multipartSessionInfo,
 ) (models.Attachment, error) {
-	s3Store, ok := s.storage.(*storage.S3Store)
-	if !ok {
+	s3Store := s.defaultS3Store()
+	if s3Store == nil {
 		return models.Attachment{}, fmt.Errorf("multipart upload session requires s3 storage")
 	}
 
@@ -867,11 +897,11 @@ func (s *AttachmentService) completeMultipartAttachmentUploadSession(
 		uploadedSize,
 		contentHash,
 		session.EncryptionMetadata,
-		storageTypeName(s.storage),
+		s.defaultStorageType(),
 		multipart.StorageKey,
 	)
 	if err != nil {
-		_ = s.storage.Delete(ctx, multipart.StorageKey)
+		_ = s3Store.Delete(ctx, multipart.StorageKey)
 		return models.Attachment{}, err
 	}
 
@@ -925,11 +955,21 @@ func (s *AttachmentService) DeleteAttachment(ctx context.Context, userID int64, 
 		return err
 	}
 	if refCount <= 1 {
-		if err := s.storage.Delete(ctx, attachment.StorageKey); err != nil {
+		mainStore, err := s.storageForType(attachment.StorageType)
+		if err != nil {
+			return err
+		}
+		if err := mainStore.Delete(ctx, attachment.StorageKey); err != nil {
 			return err
 		}
 		if attachment.ThumbnailStorageKey != "" {
-			_ = s.storage.Delete(ctx, attachment.ThumbnailStorageKey)
+			thumbnailStorageType := attachment.ThumbnailStorageType
+			if strings.TrimSpace(thumbnailStorageType) == "" {
+				thumbnailStorageType = attachment.StorageType
+			}
+			if thumbnailStore, thumbnailErr := s.storageForType(thumbnailStorageType); thumbnailErr == nil {
+				_ = thumbnailStore.Delete(ctx, attachment.ThumbnailStorageKey)
+			}
 		}
 	}
 	return s.store.DeleteAttachment(ctx, attachmentID)
@@ -944,18 +984,34 @@ func (s *AttachmentService) AttachmentVisibleToUser(ctx context.Context, attachm
 }
 
 func (s *AttachmentService) OpenAttachmentStream(ctx context.Context, attachment models.Attachment) (io.ReadCloser, error) {
-	return s.storage.Open(ctx, attachment.StorageKey)
+	store, err := s.storageForType(attachment.StorageType)
+	if err != nil {
+		return nil, err
+	}
+	return store.Open(ctx, attachment.StorageKey)
 }
 
 func (s *AttachmentService) OpenAttachmentRangeStream(ctx context.Context, attachment models.Attachment, start int64, end int64) (io.ReadCloser, error) {
-	return s.storage.OpenRange(ctx, attachment.StorageKey, start, end)
+	store, err := s.storageForType(attachment.StorageType)
+	if err != nil {
+		return nil, err
+	}
+	return store.OpenRange(ctx, attachment.StorageKey, start, end)
 }
 
 func (s *AttachmentService) OpenAttachmentThumbnailStream(ctx context.Context, attachment models.Attachment) (io.ReadCloser, error) {
 	if strings.TrimSpace(attachment.ThumbnailStorageKey) == "" {
 		return nil, os.ErrNotExist
 	}
-	return s.storage.Open(ctx, attachment.ThumbnailStorageKey)
+	thumbnailStorageType := attachment.ThumbnailStorageType
+	if strings.TrimSpace(thumbnailStorageType) == "" {
+		thumbnailStorageType = attachment.StorageType
+	}
+	store, err := s.storageForType(thumbnailStorageType)
+	if err != nil {
+		return nil, err
+	}
+	return store.Open(ctx, attachment.ThumbnailStorageKey)
 }
 
 func (s *AttachmentService) OpenAttachment(ctx context.Context, attachmentID int64) (models.Attachment, io.ReadCloser, error) {
@@ -1055,7 +1111,7 @@ func (s *AttachmentService) newAttachmentStorageKey(ctx context.Context, userID 
 		if err != nil {
 			return "", err
 		}
-		key := buildAttachmentStorageKey(userID, nanoID, filename)
+		key := buildAttachmentStorageKey(userID, nanoID)
 		count, err := s.store.CountAttachmentsByStorageKey(ctx, key)
 		if err != nil {
 			return "", err
@@ -1067,8 +1123,8 @@ func (s *AttachmentService) newAttachmentStorageKey(ctx context.Context, userID 
 	return "", fmt.Errorf("failed to allocate unique attachment storage key")
 }
 
-func buildAttachmentStorageKey(userID int64, nanoID string, filename string) string {
-	return fmt.Sprintf("attachments/%d/%s_%s", userID, nanoID, filename)
+func buildAttachmentStorageKey(userID int64, nanoID string) string {
+	return fmt.Sprintf("attachments/%d/%s.bin", userID, nanoID)
 }
 
 func generateNanoID(length int) (string, error) {
@@ -1088,12 +1144,10 @@ func generateNanoID(length int) (string, error) {
 }
 
 func storageTypeName(s storage.Store) string {
-	switch s.(type) {
-	case *storage.S3Store:
-		return "S3"
-	default:
-		return "LOCAL"
+	if s == nil {
+		return storage.TypeLocal
 	}
+	return storage.NormalizeType(s.Type())
 }
 
 func hashFileSHA256(path string) (string, error) {
@@ -1209,8 +1263,8 @@ func (s *AttachmentService) listContiguousMultipartParts(
 	ctx context.Context,
 	info multipartSessionInfo,
 ) ([]storage.S3UploadedPart, int64, int32, error) {
-	s3Store, ok := s.storage.(*storage.S3Store)
-	if !ok {
+	s3Store := s.defaultS3Store()
+	if s3Store == nil {
 		return nil, 0, 0, fmt.Errorf("multipart upload session requires s3 storage")
 	}
 	uploadedParts, err := s3Store.ListMultipartUploadedParts(ctx, info.StorageKey, info.MultipartUploadID)
@@ -1238,10 +1292,116 @@ func (s *AttachmentService) listContiguousMultipartParts(
 	return contiguous, totalSize, expectedPart, nil
 }
 
+func (s *AttachmentService) CleanupOrphanFiles(ctx context.Context) (StorageCleanupResult, error) {
+	referencedByType := make(map[string]map[string]struct{})
+	addReference := func(storeType string, key string) {
+		normalizedType := storage.NormalizeType(storeType)
+		trimmedKey := strings.TrimSpace(key)
+		if trimmedKey == "" {
+			return
+		}
+		items := referencedByType[normalizedType]
+		if items == nil {
+			items = make(map[string]struct{})
+			referencedByType[normalizedType] = items
+		}
+		items[trimmedKey] = struct{}{}
+	}
+
+	attachments, err := s.store.ListAllAttachments(ctx)
+	if err != nil {
+		return StorageCleanupResult{}, err
+	}
+	for _, attachment := range attachments {
+		addReference(attachment.StorageType, attachment.StorageKey)
+		thumbnailType := attachment.ThumbnailStorageType
+		if strings.TrimSpace(thumbnailType) == "" {
+			thumbnailType = attachment.StorageType
+		}
+		addReference(thumbnailType, attachment.ThumbnailStorageKey)
+	}
+
+	users, err := s.store.ListUserAvatarStorageRefs(ctx)
+	if err != nil {
+		return StorageCleanupResult{}, err
+	}
+	for _, user := range users {
+		addReference(user.AvatarStorageType, avatarStorageKey(user.ID))
+	}
+
+	var result StorageCleanupResult
+	var firstErr error
+	for _, backend := range s.storageRouter.Stores() {
+		storeType := storage.NormalizeType(backend.Type())
+		keys, listErr := backend.ListKeys(ctx, "")
+		if listErr != nil {
+			if firstErr == nil {
+				firstErr = listErr
+			}
+			continue
+		}
+		referenced := referencedByType[storeType]
+		for _, key := range keys {
+			trimmedKey := strings.TrimSpace(key)
+			if !isManagedStorageKey(trimmedKey) {
+				continue
+			}
+			result.ScannedKeys++
+			if _, exists := referenced[trimmedKey]; exists {
+				continue
+			}
+			if deleteErr := backend.Delete(ctx, trimmedKey); deleteErr != nil {
+				result.FailedKeys++
+				if firstErr == nil {
+					firstErr = deleteErr
+				}
+				continue
+			}
+			result.DeletedKeys++
+		}
+	}
+	return result, firstErr
+}
+
+func isManagedStorageKey(key string) bool {
+	return strings.HasPrefix(key, "attachments/") || strings.HasPrefix(key, "avatars/")
+}
+
 func sumUploadedPartSizes(parts []storage.S3UploadedPart) int64 {
 	var total int64
 	for _, part := range parts {
 		total += part.Size
 	}
 	return total
+}
+
+func (s *AttachmentService) defaultStorage() storage.Store {
+	if s.storageRouter == nil {
+		return nil
+	}
+	return s.storageRouter.DefaultStore()
+}
+
+func (s *AttachmentService) defaultStorageType() string {
+	if s.storageRouter == nil {
+		return storage.TypeLocal
+	}
+	return s.storageRouter.DefaultType()
+}
+
+func (s *AttachmentService) storageForType(storeType string) (storage.Store, error) {
+	if s.storageRouter == nil {
+		return nil, fmt.Errorf("storage is not configured")
+	}
+	resolved, ok := s.storageRouter.StoreForType(storeType)
+	if !ok {
+		return nil, fmt.Errorf("storage type %s is not configured", storage.NormalizeType(storeType))
+	}
+	return resolved, nil
+}
+
+func (s *AttachmentService) defaultS3Store() *storage.S3Store {
+	store := s.defaultStorage()
+	s3Store, _ := store.(*storage.S3Store)
+	return s3Store
 }

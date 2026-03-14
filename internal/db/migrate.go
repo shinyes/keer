@@ -11,6 +11,7 @@ func Migrate(db *sql.DB) error {
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			username TEXT NOT NULL UNIQUE COLLATE NOCASE,
 			avatar_url TEXT NOT NULL DEFAULT '',
+			avatar_storage_type TEXT NOT NULL DEFAULT '',
 			email TEXT NOT NULL DEFAULT '',
 			password_hash TEXT NOT NULL DEFAULT '',
 			role TEXT NOT NULL DEFAULT 'USER',
@@ -67,6 +68,14 @@ func Migrate(db *sql.DB) error {
 			wrapped_sharing_private_key TEXT NOT NULL DEFAULT '',
 			key_version INTEGER NOT NULL DEFAULT 1,
 			algorithms TEXT NOT NULL DEFAULT '',
+			create_time TEXT NOT NULL,
+			update_time TEXT NOT NULL,
+			FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+		);`,
+		`CREATE TABLE IF NOT EXISTS user_general_settings (
+			user_id INTEGER PRIMARY KEY,
+			memo_edit_gesture TEXT NOT NULL DEFAULT 'NONE',
+			memo_columns_json TEXT NOT NULL DEFAULT '[]',
 			create_time TEXT NOT NULL,
 			update_time TEXT NOT NULL,
 			FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -341,6 +350,14 @@ func Migrate(db *sql.DB) error {
 		db,
 		"users",
 		"avatar_url",
+		"TEXT NOT NULL DEFAULT ''",
+	); err != nil {
+		return fmt.Errorf("migration failed: %w", err)
+	}
+	if err := ensureColumn(
+		db,
+		"users",
+		"avatar_storage_type",
 		"TEXT NOT NULL DEFAULT ''",
 	); err != nil {
 		return fmt.Errorf("migration failed: %w", err)

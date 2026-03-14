@@ -56,12 +56,6 @@ func NewRouter(
 		})
 	}
 
-	app.Get("/api/v1/instance/profile", func(c *fiber.Ctx) error {
-		return c.JSON(profileResponse{
-			KeerAPIVersion: cfg.KeerAPIVersion,
-		})
-	})
-
 	app.Post("/api/v1/auth/signin", func(c *fiber.Ctx) error {
 		var req signInRequest
 		if err := c.BodyParser(&req); err != nil {
@@ -173,6 +167,7 @@ func NewRouter(
 	registerUserRoutes(api, userService, memoService)
 	registerMemoRoutes(api, memoService, buildAPIMemo)
 	registerGroupRoutes(api, userService, groupService)
+	registerAdminRoutes(api, attachmentService)
 
 	api.Get("/attachments", func(c *fiber.Ctx) error {
 		currentUser := CurrentUser(c)

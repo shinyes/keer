@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -101,6 +102,38 @@ func (s *LocalStore) Delete(_ context.Context, key string) error {
 		return err
 	}
 	return nil
+}
+
+func (s *LocalStore) ListKeys(_ context.Context, prefix string) ([]string, error) {
+	keys := make([]string, 0)
+	baseDir := filepath.Clean(s.baseDir)
+	err := filepath.Walk(baseDir, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if info.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(baseDir, path)
+		if err != nil {
+			return err
+		}
+		key := filepath.ToSlash(rel)
+		if prefix != "" && !strings.HasPrefix(key, prefix) {
+			return nil
+		}
+		keys = append(keys, key)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(keys)
+	return keys, nil
+}
+
+func (s *LocalStore) Type() string {
+	return TypeLocal
 }
 
 type readerWithCloser struct {

@@ -39,35 +39,45 @@ func Build(ctx context.Context, cfg config.Config) (*Container, func() error, er
 	}
 
 	sqlStore := store.New(sqliteDB)
+	if err := sqlStore.PromoteUsersToAdminByUsername(ctx, cfg.AdminUsers); err != nil {
+		_ = cleanup()
+		return nil, nil, err
+	}
 	userService := service.NewUserService(sqlStore)
 	userService.ConfigureAuth(cfg.JWTSecret, cfg.AccessTokenTTL, cfg.RefreshTokenTTL)
 
 	memoService := service.NewMemoService(sqlStore)
 	groupService := service.NewGroupService(sqlStore)
 
-	var fileStorage storage.Store
-	switch cfg.Storage {
-	case config.StorageBackendLocal:
-		localStore, err := storage.NewLocalStore(cfg.UploadsDir)
-		if err != nil {
-			_ = cleanup()
-			return nil, nil, err
-		}
-		fileStorage = localStore
-	case config.StorageBackendS3:
+	localStore, err := storage.NewLocalStore(cfg.UploadsDir)
+	if err != nil {
+		_ = cleanup()
+		return nil, nil, err
+	}
+	stores := []storage.Store{localStore}
+	if cfg.Storage == config.StorageBackendS3 {
 		s3Store, err := storage.NewS3Store(ctx, cfg.S3)
 		if err != nil {
 			_ = cleanup()
 			return nil, nil, err
 		}
-		fileStorage = s3Store
-	default:
+		stores = append(stores, s3Store)
+	} else if cfg.S3.Endpoint != "" && cfg.S3.Region != "" && cfg.S3.Bucket != "" && cfg.S3.AccessKeyID != "" && cfg.S3.AccessSecret != "" {
+		s3Store, err := storage.NewS3Store(ctx, cfg.S3)
+		if err != nil {
+			_ = cleanup()
+			return nil, nil, err
+		}
+		stores = append(stores, s3Store)
+	}
+	storageRouter := storage.NewRouter(storage.NormalizeType(string(cfg.Storage)), stores...)
+	if storageRouter.DefaultStore() == nil {
 		_ = cleanup()
 		return nil, nil, fmt.Errorf("unsupported storage backend %s", cfg.Storage)
 	}
 
-	attachmentService := service.NewAttachmentService(sqlStore, fileStorage)
-	userService.SetAvatarStorage(fileStorage)
+	attachmentService := service.NewAttachmentService(sqlStore, storageRouter)
+	userService.SetAvatarStorageRouter(storageRouter)
 	_ = attachmentService.CleanupExpiredUploadSessions(ctx)
 	router := httpserver.NewRouter(cfg, userService, memoService, groupService, attachmentService)
 

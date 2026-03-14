@@ -42,7 +42,7 @@ func thumbnailStorageKey(storageKey string) string {
 	if storageKey == "" {
 		return ""
 	}
-	return storageKey + ".thumb.jpg"
+	return strings.TrimSuffix(storageKey, ".bin") + ".thumb.bin"
 }
 
 func shouldGenerateThumbnail(contentType string, filename string) bool {
@@ -58,9 +58,9 @@ func buildThumbnailFilename(filename string) string {
 	ext := filepath.Ext(trimmed)
 	base := strings.TrimSuffix(trimmed, ext)
 	if strings.TrimSpace(base) == "" {
-		base = "image"
+		base = "blob"
 	}
-	return base + "_thumb.jpg"
+	return base + ".thumb.bin"
 }
 
 func (s *AttachmentService) copyThumbnailMetadataFromExisting(
@@ -115,7 +115,11 @@ func (s *AttachmentService) ensureThumbnailFromBytes(
 	if thumbnailKey == "" {
 		return
 	}
-	thumbnailSize, err := s.storage.Put(ctx, thumbnailKey, thumbnailContentType, thumbnailData)
+	store, err := s.storageForType(attachment.StorageType)
+	if err != nil {
+		return
+	}
+	thumbnailSize, err := store.Put(ctx, thumbnailKey, thumbnailContentType, thumbnailData)
 	if err != nil || thumbnailSize <= 0 {
 		return
 	}
@@ -125,7 +129,7 @@ func (s *AttachmentService) ensureThumbnailFromBytes(
 		buildThumbnailFilename(filename),
 		thumbnailContentType,
 		thumbnailSize,
-		storageTypeName(s.storage),
+		storageTypeName(store),
 		thumbnailKey,
 	)
 }
@@ -161,7 +165,11 @@ func (s *AttachmentService) ensureThumbnailFromFile(
 	if thumbnailKey == "" {
 		return
 	}
-	thumbnailSize, err := s.storage.Put(ctx, thumbnailKey, thumbnailContentType, thumbnailData)
+	store, err := s.storageForType(attachment.StorageType)
+	if err != nil {
+		return
+	}
+	thumbnailSize, err := store.Put(ctx, thumbnailKey, thumbnailContentType, thumbnailData)
 	if err != nil || thumbnailSize <= 0 {
 		return
 	}
@@ -171,7 +179,7 @@ func (s *AttachmentService) ensureThumbnailFromFile(
 		buildThumbnailFilename(filename),
 		thumbnailContentType,
 		thumbnailSize,
-		storageTypeName(s.storage),
+		storageTypeName(store),
 		thumbnailKey,
 	)
 }
@@ -212,7 +220,11 @@ func (s *AttachmentService) ensureThumbnailFromUploadSession(
 	if thumbnailKey == "" {
 		return
 	}
-	thumbnailSize, err := s.storage.PutStream(ctx, thumbnailKey, thumbnailType, f, stat.Size())
+	store, err := s.storageForType(attachment.StorageType)
+	if err != nil {
+		return
+	}
+	thumbnailSize, err := store.PutStream(ctx, thumbnailKey, thumbnailType, f, stat.Size())
 	if err != nil || thumbnailSize <= 0 {
 		return
 	}
@@ -222,7 +234,7 @@ func (s *AttachmentService) ensureThumbnailFromUploadSession(
 		thumbnailFilename,
 		thumbnailType,
 		thumbnailSize,
-		storageTypeName(s.storage),
+		storageTypeName(store),
 		thumbnailKey,
 	)
 }

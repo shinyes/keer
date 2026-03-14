@@ -94,10 +94,46 @@ func registerUserRoutes(
 		if user.ID != currentUser.ID {
 			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"message": "forbidden"})
 		}
+		settings, err := userService.GetUserGeneralSettings(c.Context(), user.ID)
+		if err != nil {
+			return internalError(c, err)
+		}
 		return c.JSON(userSettingResponse{
-			GeneralSetting: generalSetting{
-				MemoVisibility: string(user.DefaultVisibility),
-			},
+			GeneralSetting: toAPIGeneralSetting(settings),
+		})
+	})
+
+	api.Put("/users/:name/settings/GENERAL", func(c *fiber.Ctx) error {
+		currentUser := CurrentUser(c)
+		name := strings.TrimSpace(c.Params("name"))
+		if name == "" {
+			return badRequest(c, "invalid user name")
+		}
+		user, err := userService.GetUserByIdentifier(c.Context(), name)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return notFound(c, "user not found")
+			}
+			return internalError(c, err)
+		}
+		if user.ID != currentUser.ID {
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"message": "forbidden"})
+		}
+
+		var req updateUserGeneralSettingRequest
+		if err := c.BodyParser(&req); err != nil {
+			return badRequest(c, "invalid request body")
+		}
+		settings, err := userService.UpdateUserGeneralSettings(c.Context(), user.ID, service.UpdateUserGeneralSettingsInput{
+			MemoVisibility:  req.GeneralSetting.MemoVisibility,
+			MemoEditGesture: req.GeneralSetting.MemoEditGesture,
+			MemoColumns:     toModelMemoColumns(req.GeneralSetting.MemoColumns),
+		})
+		if err != nil {
+			return badRequest(c, err.Error())
+		}
+		return c.JSON(userSettingResponse{
+			GeneralSetting: toAPIGeneralSetting(settings),
 		})
 	})
 
@@ -431,4 +467,40 @@ func registerUserRoutes(
 		return c.JSON(toAPIUser(updatedUser))
 	})
 
+}
+
+func toAPIGeneralSetting(settings models.UserGeneralSettings) generalSetting {
+	return generalSetting{
+		MemoVisibility:  string(settings.MemoVisibility),
+		MemoEditGesture: string(settings.MemoEditGesture),
+		MemoColumns:     toAPIMemoColumns(settings.MemoColumns),
+	}
+}
+
+func toAPIMemoColumns(columns []models.MemoColumnConfig) []apiMemoColumnConfig {
+	result := make([]apiMemoColumnConfig, 0, len(columns))
+	for _, column := range columns {
+		result = append(result, apiMemoColumnConfig{
+			ID:              column.ID,
+			Name:            column.Name,
+			RequiredTags:    column.RequiredTags,
+			VisibleInDrawer: column.VisibleInDrawer,
+			PinnedMemoNames: column.PinnedMemoNames,
+		})
+	}
+	return result
+}
+
+func toModelMemoColumns(columns []apiMemoColumnConfig) []models.MemoColumnConfig {
+	result := make([]models.MemoColumnConfig, 0, len(columns))
+	for _, column := range columns {
+		result = append(result, models.MemoColumnConfig{
+			ID:              column.ID,
+			Name:            column.Name,
+			RequiredTags:    column.RequiredTags,
+			VisibleInDrawer: column.VisibleInDrawer,
+			PinnedMemoNames: column.PinnedMemoNames,
+		})
+	}
+	return result
 }
