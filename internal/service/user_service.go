@@ -53,8 +53,6 @@ var (
 	usernamePattern           = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{2,31}$`)
 )
 
-const settingKeyAllowRegistration = "allow_registration"
-
 const (
 	defaultAccessTokenTTL  = 15 * time.Minute
 	defaultRefreshTokenTTL = 30 * 24 * time.Hour
@@ -592,32 +590,6 @@ func (s *UserService) CreateUser(ctx context.Context, creator *models.User, inpu
 		return models.User{}, err
 	}
 	return user, nil
-}
-
-func (s *UserService) ResolveAllowRegistration(ctx context.Context, fallback bool) (bool, error) {
-	raw, err := s.store.GetSetting(ctx, settingKeyAllowRegistration)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return fallback, nil
-		}
-		return fallback, err
-	}
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "true", "1", "yes", "on":
-		return true, nil
-	case "false", "0", "no", "off":
-		return false, nil
-	default:
-		return fallback, nil
-	}
-}
-
-func (s *UserService) SetAllowRegistration(ctx context.Context, allow bool) error {
-	value := "false"
-	if allow {
-		value = "true"
-	}
-	return s.store.UpsertSetting(ctx, settingKeyAllowRegistration, value)
 }
 
 func (s *UserService) CreateAccessTokenForUser(ctx context.Context, identifier string, description string) (models.User, string, error) {

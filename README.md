@@ -13,7 +13,7 @@ Keer 是一个使用 Go 开发的轻量级后端服务，提供用户、Memo、�
 - Memo 的增删改查与变更同步
 - 附件管理（Base64 直传、分片/断点续传、下载、缩略图）
 - 群组、群消息与群标签管理
-- 运行时管理控制台（用户、Token、注册开关）
+- 管理员接口（当前包含存储清理）
 
 ## 零知识原则（面向端到端加密）
 
@@ -73,8 +73,6 @@ $env:JWT_SECRET="replace-with-a-long-random-secret"
 go run ./cmd/server
 ```
 
-服务启动后会进入 `keer>` 运行时控制台。输入 `help` 查看命令，输入 `exit` 只退出控制台，不会停止 HTTP 服务。
-
 ## 环境变量
 
 | 变量 | 默认值 | 说明 |
@@ -100,7 +98,6 @@ go run ./cmd/server
 
 - 当 `STORAGE_BACKEND=s3` 时，所有 `S3_*` 必填项都会在启动时校验
 - `ADMIN_USERS` 使用用户名匹配，例如 `ADMIN_USERS=alice,bob`
-- `ALLOW_REGISTRATION` 仍可被运行时控制台中的 `registration enable/disable` 持久化覆盖
 - 当前默认不配置 CORS；如果未来需要浏览器跨域访问，再单独补相关能力
 
 ## Docker
@@ -218,27 +215,6 @@ docker compose down
   - `DB_PATH=/data/keer.db`
   - `UPLOADS_DIR=/data/uploads`
 - 运行镜像时必须保证 `/data` 可写
-
-## 运行时控制台命令
-
-```text
-user create <username> <password> [role]
-token create <username_or_id> [description] [--ttl 7d|24h]
-token list <username_or_id> [--all]
-token revoke <token_id>
-registration status
-registration enable
-registration disable
-help
-exit
-```
-
-说明：
-
-- `token create` 默认 `--ttl 7d`
-- 如果你需要固定的 Personal Access Token，请在服务启动后通过运行时控制台执行 `token create`
-- `registration enable/disable` 会立即影响 `POST /api/v1/users`
-- 存储后端不再支持运行时控制台修改，必须通过环境变量设置并重启服务
 
 ## GitHub Actions
 

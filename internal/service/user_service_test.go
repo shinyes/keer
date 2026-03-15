@@ -308,42 +308,6 @@ func TestRefreshSession_SameRefreshTokenOnlyOneConcurrentRequestSucceeds(t *test
 	}
 }
 
-func TestResolveAllowRegistration(t *testing.T) {
-	services := setupTestServices(t)
-	userService := newTestUserService(t, services.store)
-	ctx := context.Background()
-
-	allow, err := userService.ResolveAllowRegistration(ctx, true)
-	if err != nil {
-		t.Fatalf("ResolveAllowRegistration(default=true) error = %v", err)
-	}
-	if !allow {
-		t.Fatalf("expected true when no setting and fallback=true")
-	}
-
-	if err := userService.SetAllowRegistration(ctx, false); err != nil {
-		t.Fatalf("SetAllowRegistration(false) error = %v", err)
-	}
-	allow, err = userService.ResolveAllowRegistration(ctx, true)
-	if err != nil {
-		t.Fatalf("ResolveAllowRegistration(after false) error = %v", err)
-	}
-	if allow {
-		t.Fatalf("expected false from persisted setting")
-	}
-
-	if err := userService.SetAllowRegistration(ctx, true); err != nil {
-		t.Fatalf("SetAllowRegistration(true) error = %v", err)
-	}
-	allow, err = userService.ResolveAllowRegistration(ctx, false)
-	if err != nil {
-		t.Fatalf("ResolveAllowRegistration(after true) error = %v", err)
-	}
-	if !allow {
-		t.Fatalf("expected true from persisted setting")
-	}
-}
-
 func TestCreateAccessTokenForUser(t *testing.T) {
 	services := setupTestServices(t)
 	userService := newTestUserService(t, services.store)

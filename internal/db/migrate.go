@@ -301,11 +301,6 @@ func Migrate(db *sql.DB) error {
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_attachment_upload_sessions_creator ON attachment_upload_sessions(creator_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_attachment_upload_sessions_update_time ON attachment_upload_sessions(update_time);`,
-		`CREATE TABLE IF NOT EXISTS system_settings (
-			key TEXT PRIMARY KEY,
-			value TEXT NOT NULL,
-			update_time TEXT NOT NULL
-		);`,
 	}
 
 	for _, stmt := range stmts {

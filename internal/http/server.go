@@ -132,17 +132,12 @@ func NewRouter(
 			return internalError(c, fmt.Errorf("authenticate optional token: %w", err))
 		}
 
-		allowRegistration, err := userService.ResolveAllowRegistration(c.Context(), cfg.AllowRegistration)
-		if err != nil {
-			return internalError(c, err)
-		}
-
 		user, err := userService.CreateUser(c.Context(), creator, service.CreateUserInput{
 			Username:     req.User.Username,
 			Password:     req.User.Password,
 			Role:         req.User.Role,
 			ValidateOnly: req.ValidateOnly,
-		}, allowRegistration)
+		}, cfg.AllowRegistration)
 		if err != nil {
 			switch {
 			case errors.Is(err, service.ErrInvalidUsername):
