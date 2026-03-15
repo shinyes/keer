@@ -84,6 +84,7 @@ go run ./cmd/server
 | `UPLOADS_DIR` | `./data/uploads` | 本地文件存储目录，仅 `local` 模式生效 |
 | `HTTP_BODY_LIMIT_MB` | `64` | HTTP 请求体上限（MiB） |
 | `ALLOW_REGISTRATION` | `true` | 是否允许公开注册 |
+| `ADMIN_USERS` | 空 | 逗号分隔的管理员用户名列表，服务启动时会把这些用户提升为 `ADMIN` |
 | `JWT_SECRET` | 必填 | JWT 签名密钥，不能为空，也不能使用 `change-me-in-production` |
 | `ACCESS_TOKEN_TTL` | `15m` | Access Token 有效期 |
 | `REFRESH_TOKEN_TTL` | `720h` | Refresh Token 有效期 |
@@ -98,6 +99,7 @@ go run ./cmd/server
 说明：
 
 - 当 `STORAGE_BACKEND=s3` 时，所有 `S3_*` 必填项都会在启动时校验
+- `ADMIN_USERS` 使用用户名匹配，例如 `ADMIN_USERS=alice,bob`
 - `ALLOW_REGISTRATION` 仍可被运行时控制台中的 `registration enable/disable` 持久化覆盖
 - 当前默认不配置 CORS；如果未来需要浏览器跨域访问，再单独补相关能力
 
@@ -115,6 +117,7 @@ docker build -t keer:local .
 docker run --rm -it \
   -p 12843:12843 \
   -e STORAGE_BACKEND=local \
+  -e ADMIN_USERS=alice \
   -e JWT_SECRET=replace-with-a-long-random-secret \
   -v keer-data:/data \
   keer:local
@@ -126,6 +129,7 @@ docker run --rm -it \
 docker run --rm -it \
   -p 12843:12843 \
   -e STORAGE_BACKEND=s3 \
+  -e ADMIN_USERS=alice \
   -e S3_ENDPOINT=https://<endpoint> \
   -e S3_REGION=auto \
   -e S3_BUCKET=<bucket> \
@@ -151,6 +155,7 @@ services:
       - "12843:12843"
     environment:
       STORAGE_BACKEND: local
+      ADMIN_USERS: alice
       JWT_SECRET: replace-with-a-long-random-secret
     volumes:
       - ./keer-data:/data
@@ -178,6 +183,32 @@ docker compose down
 ```
 
 如果你要改成 S3 模式，只需要把 `STORAGE_BACKEND` 改为 `s3`，并补上 `S3_ENDPOINT`、`S3_REGION`、`S3_BUCKET`、`S3_ACCESS_KEY_ID`、`S3_ACCESS_KEY_SECRET`、`S3_USE_PATH_STYLE` 这些环境变量。
+
+## 管理员配置
+
+当前管理员有两种来源：
+
+- `HOST` 角色用户
+- 通过 `ADMIN_USERS` 环境变量在启动时提升为 `ADMIN` 的用户
+
+推荐做法：
+
+1. 先正常注册一个账号，例如 `alice`
+2. 重启服务时设置 `ADMIN_USERS=alice`
+3. 该账号重新登录后，就会在 Android 设置页看到“管理员”分组
+
+当前管理员功能：
+
+- 清除孤儿文件
+
+说明：
+
+- 清除孤儿文件会扫描所有已配置的存储后端，不只扫描默认存储
+- 因此同时支持：
+  - 纯本地文件存储
+  - 纯 S3
+  - 本地 + S3 混合存储
+- 当前接口路径为 `POST /api/v1/admin/storage/cleanup-orphans`
 
 镜像默认：
 
