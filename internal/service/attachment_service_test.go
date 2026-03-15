@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/shinyes/keer/internal/models"
 	"github.com/shinyes/keer/internal/storage"
 )
 
@@ -332,6 +333,78 @@ func TestCompleteAttachmentUploadSession_UsesClientProvidedThumbnail(t *testing.
 
 	if _, err := os.Stat(session.ThumbnailTempPath); !os.IsNotExist(err) {
 		t.Fatalf("expected thumbnail temp file removed, stat err=%v", err)
+	}
+}
+
+func TestCompleteAttachmentUploadSession_RollsBackAttachmentWhenMemoBindingFails(t *testing.T) {
+	services := setupTestServices(t)
+	localStore, err := storage.NewLocalStore(filepath.Join(t.TempDir(), "uploads"))
+	if err != nil {
+		t.Fatalf("NewLocalStore() error = %v", err)
+	}
+	attachmentService := NewAttachmentService(services.store, storage.NewRouter(storage.TypeLocal, localStore))
+	user := mustCreateUser(t, services.store, "attach-rollback")
+
+	createdMemo, err := services.memoService.CreateMemo(context.Background(), user.ID, CreateMemoInput{
+		Content:    "encrypted",
+		Visibility: models.VisibilityPrivate,
+	})
+	if err != nil {
+		t.Fatalf("CreateMemo() error = %v", err)
+	}
+
+	memoName := createdMemo.Memo.Name()
+	uploadData := []byte("upload-body")
+	session, err := attachmentService.CreateAttachmentUploadSession(
+		context.Background(),
+		user.ID,
+		CreateAttachmentUploadSessionInput{
+			Filename: "note.txt",
+			Type:     "text/plain",
+			Size:     int64(len(uploadData)),
+			MemoName: &memoName,
+		},
+	)
+	if err != nil {
+		t.Fatalf("CreateAttachmentUploadSession() error = %v", err)
+	}
+
+	if _, err := attachmentService.AppendAttachmentUploadChunk(
+		context.Background(),
+		user.ID,
+		session.ID,
+		0,
+		uploadData,
+	); err != nil {
+		t.Fatalf("AppendAttachmentUploadChunk() error = %v", err)
+	}
+
+	if err := services.memoService.DeleteMemo(context.Background(), user.ID, createdMemo.Memo.ID); err != nil {
+		t.Fatalf("DeleteMemo() error = %v", err)
+	}
+
+	if _, err := attachmentService.CompleteAttachmentUploadSession(context.Background(), user.ID, session.ID); err == nil {
+		t.Fatal("expected CompleteAttachmentUploadSession() to fail after memo deletion")
+	}
+
+	attachments, err := services.store.ListAttachmentsByCreator(context.Background(), user.ID)
+	if err != nil {
+		t.Fatalf("ListAttachmentsByCreator() error = %v", err)
+	}
+	if len(attachments) != 0 {
+		t.Fatalf("expected no persisted attachments after rollback, got %d", len(attachments))
+	}
+
+	if _, err := services.store.GetAttachmentUploadSessionByID(context.Background(), session.ID); err != nil {
+		t.Fatalf("expected upload session to remain for retry, got err=%v", err)
+	}
+
+	keys, err := localStore.ListKeys(context.Background(), "")
+	if err != nil {
+		t.Fatalf("ListKeys() error = %v", err)
+	}
+	if len(keys) != 0 {
+		t.Fatalf("expected no stored attachment blobs after rollback, got %v", keys)
 	}
 }
 

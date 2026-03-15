@@ -84,7 +84,7 @@ go run ./cmd/server
 | `UPLOADS_DIR` | `./data/uploads` | 本地文件存储目录，仅 `local` 模式生效 |
 | `HTTP_BODY_LIMIT_MB` | `64` | HTTP 请求体上限（MiB） |
 | `ALLOW_REGISTRATION` | `true` | 是否允许公开注册 |
-| `JWT_SECRET` | `change-me-in-production` | JWT 签名密钥，生产环境必须覆盖 |
+| `JWT_SECRET` | 必填 | JWT 签名密钥，不能为空，也不能使用 `change-me-in-production` |
 | `ACCESS_TOKEN_TTL` | `15m` | Access Token 有效期 |
 | `REFRESH_TOKEN_TTL` | `720h` | Refresh Token 有效期 |
 | `STORAGE_BACKEND` | `local` | 存储后端：`local` 或 `s3` |

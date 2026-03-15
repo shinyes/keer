@@ -9,6 +9,7 @@ func TestLoad_DefaultLocalStorage(t *testing.T) {
 	t.Setenv("S3_BUCKET", "")
 	t.Setenv("S3_ACCESS_KEY_ID", "")
 	t.Setenv("S3_ACCESS_KEY_SECRET", "")
+	t.Setenv("JWT_SECRET", "custom-secret")
 
 	cfg, err := Load()
 	if err != nil {
@@ -16,6 +17,9 @@ func TestLoad_DefaultLocalStorage(t *testing.T) {
 	}
 	if cfg.Storage != StorageBackendLocal {
 		t.Fatalf("expected local storage, got %q", cfg.Storage)
+	}
+	if cfg.JWTSecret != "custom-secret" {
+		t.Fatalf("expected configured JWT secret, got %q", cfg.JWTSecret)
 	}
 }
 
@@ -27,6 +31,7 @@ func TestLoad_S3StorageFromEnv(t *testing.T) {
 	t.Setenv("S3_ACCESS_KEY_ID", "test-id")
 	t.Setenv("S3_ACCESS_KEY_SECRET", "test-secret")
 	t.Setenv("S3_USE_PATH_STYLE", "false")
+	t.Setenv("JWT_SECRET", "custom-secret")
 
 	cfg, err := Load()
 	if err != nil {
@@ -45,6 +50,7 @@ func TestLoad_S3StorageFromEnv(t *testing.T) {
 
 func TestLoad_InvalidStorageBackend(t *testing.T) {
 	t.Setenv("STORAGE_BACKEND", "bad")
+	t.Setenv("JWT_SECRET", "custom-secret")
 
 	_, err := Load()
 	if err == nil {
@@ -59,9 +65,40 @@ func TestLoad_S3StorageMissingField(t *testing.T) {
 	t.Setenv("S3_BUCKET", "keer")
 	t.Setenv("S3_ACCESS_KEY_ID", "test-id")
 	t.Setenv("S3_ACCESS_KEY_SECRET", "test-secret")
+	t.Setenv("JWT_SECRET", "custom-secret")
 
 	_, err := Load()
 	if err == nil {
 		t.Fatal("expected error for incomplete s3 config")
+	}
+}
+
+func TestLoad_EmptyJWTSecretFails(t *testing.T) {
+	t.Setenv("JWT_SECRET", "")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected error for empty JWT secret")
+	}
+}
+
+func TestLoad_PlaceholderJWTSecretFails(t *testing.T) {
+	t.Setenv("JWT_SECRET", "change-me-in-production")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected error for placeholder JWT secret")
+	}
+}
+
+func TestLoad_UsesConfiguredJWTSecret(t *testing.T) {
+	t.Setenv("JWT_SECRET", "custom-secret")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.JWTSecret != "custom-secret" {
+		t.Fatalf("expected configured JWT secret, got %q", cfg.JWTSecret)
 	}
 }

@@ -15,6 +15,8 @@ type testServices struct {
 	memoService *MemoService
 }
 
+const testJWTSecret = "test-jwt-secret"
+
 func setupTestServices(t *testing.T) testServices {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "test.db")
@@ -33,6 +35,15 @@ func setupTestServices(t *testing.T) testServices {
 		store:       sqlStore,
 		memoService: NewMemoService(sqlStore),
 	}
+}
+
+func newTestUserService(t *testing.T, sqlStore *store.SQLStore) *UserService {
+	t.Helper()
+	userService := NewUserService(sqlStore)
+	if err := userService.ConfigureAuth(testJWTSecret, 0, 0); err != nil {
+		t.Fatalf("ConfigureAuth() error = %v", err)
+	}
+	return userService
 }
 
 func mustCreateUser(t *testing.T, s *store.SQLStore, username string) models.User {

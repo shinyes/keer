@@ -38,6 +38,64 @@ func (s *SQLStore) CreateUserWithProfile(ctx context.Context, username string, p
 	return s.GetUserByID(ctx, id)
 }
 
+func (s *SQLStore) CreateUserWithProfileSubjectToRegistration(
+	ctx context.Context,
+	username string,
+	passwordHash string,
+	requestedRole string,
+	allowRegistration bool,
+	creatorIsSuperUser bool,
+) (models.User, error) {
+	now := time.Now().UTC()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return models.User{}, err
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	var totalUsers int64
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(1) FROM users`).Scan(&totalUsers); err != nil {
+		return models.User{}, err
+	}
+
+	roleToAssign := "USER"
+	if totalUsers == 0 {
+		roleToAssign = "ADMIN"
+	} else {
+		if !allowRegistration && !creatorIsSuperUser {
+			return models.User{}, ErrRegistrationNotAllowed
+		}
+		if creatorIsSuperUser && strings.TrimSpace(requestedRole) != "" {
+			roleToAssign = requestedRole
+		}
+	}
+
+	res, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO users (username, avatar_url, avatar_storage_type, password_hash, role, default_visibility, create_time, update_time)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		username,
+		"",
+		"",
+		passwordHash,
+		roleToAssign,
+		models.VisibilityPrivate,
+		now.Format(time.RFC3339Nano),
+		now.Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return models.User{}, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return models.User{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return models.User{}, err
+	}
+	return s.GetUserByID(ctx, id)
+}
+
 func (s *SQLStore) GetUserByID(ctx context.Context, id int64) (models.User, error) {
 	var user models.User
 	var defaultVisibility string

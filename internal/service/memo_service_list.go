@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"fmt"
-	"strconv"
 
 	"github.com/shinyes/keer/internal/models"
 	"github.com/shinyes/keer/internal/store"
@@ -20,30 +19,29 @@ func (s *MemoService) ListMemos(ctx context.Context, viewerID int64, state *mode
 		state = &defaultState
 	}
 
-	// 设置安全上限，避免一次性加载过多 memo 到内存
-	const maxMemoQueryLimit = 10000
-	filtered, err := s.listFilteredVisibleMemos(
+	rawOffset, err := parsePageToken(pageToken)
+	if err != nil {
+		return nil, "", fmt.Errorf("invalid pageToken")
+	}
+	pageSize = normalizeMemoPageSize(pageSize)
+
+	page, nextToken, err := s.listFilteredVisibleMemoPage(
 		ctx,
 		viewerID,
 		state,
 		filter,
 		prefilter,
-		maxMemoQueryLimit,
-		nil,
+		pageSize,
+		rawOffset,
 	)
 	if err != nil {
 		return nil, "", err
 	}
 
-	page, nextToken, err := paginateMemos(filtered, pageSize, pageToken)
-	if err != nil {
-		return nil, "", err
-	}
 	out, err := s.attachMemos(ctx, viewerID, page)
 	if err != nil {
 		return nil, "", err
 	}
-	_ = viewerID
 	return out, nextToken, nil
 }
 
@@ -98,25 +96,82 @@ func (s *MemoService) listFilteredVisibleMemos(
 	return filtered, nil
 }
 
-func paginateMemos(memos []models.Memo, pageSize int, pageToken string) ([]models.Memo, string, error) {
-	offset, err := parsePageToken(pageToken)
-	if err != nil {
-		return nil, "", fmt.Errorf("invalid pageToken")
+func (s *MemoService) listFilteredVisibleMemoPage(
+	ctx context.Context,
+	viewerID int64,
+	state *models.MemoState,
+	filter *CELMemoFilter,
+	prefilter store.MemoSQLPrefilter,
+	pageSize int,
+	rawOffset int,
+) ([]models.Memo, string, error) {
+	const (
+		minScanBatchSize = 100
+		maxScanBatchSize = 1000
+	)
+
+	scanBatchSize := pageSize * 4
+	if scanBatchSize < minScanBatchSize {
+		scanBatchSize = minScanBatchSize
 	}
-	if pageSize <= 0 {
-		pageSize = 50
+	if scanBatchSize > maxScanBatchSize {
+		scanBatchSize = maxScanBatchSize
 	}
-	if pageSize > 200 {
-		pageSize = 200
+	if scanBatchSize < pageSize+1 {
+		scanBatchSize = pageSize + 1
 	}
 
-	if offset >= len(memos) {
-		return []models.Memo{}, "", nil
+	collected := make([]models.Memo, 0, pageSize)
+	currentOffset := rawOffset
+	lastReturnedOffset := rawOffset
+
+	for {
+		batch, err := s.store.ListVisibleMemos(
+			ctx,
+			viewerID,
+			state,
+			prefilter,
+			scanBatchSize,
+			currentOffset,
+			nil,
+		)
+		if err != nil {
+			return nil, "", err
+		}
+		if len(batch) == 0 {
+			return collected, "", nil
+		}
+
+		for index, memo := range batch {
+			matched, err := filter.Matches(memo)
+			if err != nil {
+				return nil, "", err
+			}
+			if !matched {
+				continue
+			}
+
+			rawPositionAfterRow := currentOffset + index + 1
+			if len(collected) == pageSize {
+				return collected, encodePageToken(lastReturnedOffset), nil
+			}
+			collected = append(collected, memo)
+			lastReturnedOffset = rawPositionAfterRow
+		}
+
+		if len(batch) < scanBatchSize {
+			return collected, "", nil
+		}
+		currentOffset += len(batch)
 	}
-	end := min(offset+pageSize, len(memos))
-	nextToken := ""
-	if end < len(memos) {
-		nextToken = strconv.Itoa(end)
+}
+
+func normalizeMemoPageSize(pageSize int) int {
+	if pageSize <= 0 {
+		return 50
 	}
-	return memos[offset:end], nextToken, nil
+	if pageSize > 200 {
+		return 200
+	}
+	return pageSize
 }

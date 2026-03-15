@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -113,11 +114,41 @@ func parsePageToken(pageToken string) (int, error) {
 	if pageToken == "" {
 		return 0, nil
 	}
+
 	offset, err := strconv.Atoi(pageToken)
-	if err != nil || offset < 0 {
+	if err == nil {
+		if offset < 0 {
+			return 0, fmt.Errorf("invalid page token")
+		}
+		return offset, nil
+	}
+
+	raw, err := base64.RawURLEncoding.DecodeString(pageToken)
+	if err != nil {
 		return 0, fmt.Errorf("invalid page token")
 	}
-	return offset, nil
+	var token struct {
+		RawOffset int `json:"rawOffset"`
+	}
+	if err := json.Unmarshal(raw, &token); err != nil || token.RawOffset < 0 {
+		return 0, fmt.Errorf("invalid page token")
+	}
+	return token.RawOffset, nil
+}
+
+func encodePageToken(rawOffset int) string {
+	if rawOffset <= 0 {
+		return ""
+	}
+	raw, err := json.Marshal(struct {
+		RawOffset int `json:"rawOffset"`
+	}{
+		RawOffset: rawOffset,
+	})
+	if err != nil {
+		return ""
+	}
+	return base64.RawURLEncoding.EncodeToString(raw)
 }
 
 func containsContentDrivenFilter(rawFilter string) bool {

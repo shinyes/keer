@@ -156,6 +156,116 @@ func (s *SQLStore) GetUserByRefreshToken(ctx context.Context, rawToken string) (
 	return user, token, nil
 }
 
+func (s *SQLStore) RotateRefreshToken(
+	ctx context.Context,
+	rawToken string,
+	newRawToken string,
+	expiresAt time.Time,
+) (models.User, models.RefreshToken, error) {
+	now := time.Now().UTC()
+	oldTokenHash := HashToken(rawToken)
+	newTokenHash := HashToken(newRawToken)
+	newTokenPrefix := newRawToken
+	if len(newTokenPrefix) > 8 {
+		newTokenPrefix = newTokenPrefix[:8]
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return models.User{}, models.RefreshToken{}, err
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	var user models.User
+	var oldTokenID int64
+	var defaultVisibility string
+	var userCreateTime string
+	var userUpdateTime string
+	if err := tx.QueryRowContext(
+		ctx,
+		`SELECT
+			u.id, u.username, u.avatar_url, u.avatar_storage_type, u.password_hash, u.role, u.default_visibility, u.create_time, u.update_time,
+			t.id
+		FROM refresh_tokens t
+		JOIN users u ON u.id = t.user_id
+		WHERE t.token_hash = ?
+			AND t.revoked_at IS NULL
+			AND t.expires_at > ?`,
+		oldTokenHash,
+		now.Format(time.RFC3339Nano),
+	).Scan(
+		&user.ID,
+		&user.Username,
+		&user.AvatarURL,
+		&user.AvatarStorageType,
+		&user.PasswordHash,
+		&user.Role,
+		&defaultVisibility,
+		&userCreateTime,
+		&userUpdateTime,
+		&oldTokenID,
+	); err != nil {
+		return models.User{}, models.RefreshToken{}, err
+	}
+	user.DefaultVisibility = models.Visibility(defaultVisibility)
+	user.CreateTime, err = parseTime(userCreateTime)
+	if err != nil {
+		return models.User{}, models.RefreshToken{}, err
+	}
+	user.UpdateTime, err = parseTime(userUpdateTime)
+	if err != nil {
+		return models.User{}, models.RefreshToken{}, err
+	}
+
+	res, err := tx.ExecContext(
+		ctx,
+		`UPDATE refresh_tokens
+		SET last_used_at = ?, revoked_at = ?
+		WHERE id = ? AND revoked_at IS NULL`,
+		now.Format(time.RFC3339Nano),
+		now.Format(time.RFC3339Nano),
+		oldTokenID,
+	)
+	if err != nil {
+		return models.User{}, models.RefreshToken{}, err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return models.User{}, models.RefreshToken{}, err
+	}
+	if affected == 0 {
+		return models.User{}, models.RefreshToken{}, sql.ErrNoRows
+	}
+
+	res, err = tx.ExecContext(
+		ctx,
+		`INSERT INTO refresh_tokens (user_id, token_prefix, token_hash, created_at, expires_at)
+		VALUES (?, ?, ?, ?, ?)`,
+		user.ID,
+		newTokenPrefix,
+		newTokenHash,
+		now.Format(time.RFC3339Nano),
+		expiresAt.UTC().Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return models.User{}, models.RefreshToken{}, err
+	}
+	newTokenID, err := res.LastInsertId()
+	if err != nil {
+		return models.User{}, models.RefreshToken{}, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return models.User{}, models.RefreshToken{}, err
+	}
+
+	newToken, err := s.GetRefreshTokenByID(ctx, newTokenID)
+	if err != nil {
+		return models.User{}, models.RefreshToken{}, err
+	}
+	return user, newToken, nil
+}
+
 func (s *SQLStore) TouchRefreshToken(ctx context.Context, tokenID int64) error {
 	_, err := s.db.ExecContext(
 		ctx,

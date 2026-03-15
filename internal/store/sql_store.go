@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"strconv"
 	"strings"
 	"time"
@@ -50,6 +51,8 @@ const (
 	memoChangeEventTypeDelete            = "DELETE"
 	memoChangeEventTypeVisibilityRevoked = "VISIBILITY_REVOKED"
 )
+
+var ErrRegistrationNotAllowed = errors.New("registration is not allowed")
 
 func NormalizeTagNames(tags []string) []string {
 	if len(tags) == 0 {

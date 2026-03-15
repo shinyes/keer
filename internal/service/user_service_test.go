@@ -5,13 +5,30 @@ import (
 	"database/sql"
 	"errors"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 )
 
+func TestConfigureAuth_RejectsEmptyJWTSecret(t *testing.T) {
+	userService := NewUserService(nil)
+
+	if err := userService.ConfigureAuth("", 0, 0); err == nil {
+		t.Fatal("expected ConfigureAuth() to reject empty JWT secret")
+	}
+}
+
+func TestConfigureAuth_RejectsPlaceholderJWTSecret(t *testing.T) {
+	userService := NewUserService(nil)
+
+	if err := userService.ConfigureAuth("change-me-in-production", 0, 0); err == nil {
+		t.Fatal("expected ConfigureAuth() to reject placeholder JWT secret")
+	}
+}
+
 func TestCreateUser_FirstUserIsAdmin(t *testing.T) {
 	services := setupTestServices(t)
-	userService := NewUserService(services.store)
+	userService := newTestUserService(t, services.store)
 	ctx := context.Background()
 
 	user, err := userService.CreateUser(ctx, nil, CreateUserInput{
@@ -34,7 +51,7 @@ func TestCreateUser_FirstUserIsAdmin(t *testing.T) {
 
 func TestCreateUser_DuplicateUsername(t *testing.T) {
 	services := setupTestServices(t)
-	userService := NewUserService(services.store)
+	userService := newTestUserService(t, services.store)
 	ctx := context.Background()
 
 	if _, err := userService.CreateUser(ctx, nil, CreateUserInput{Username: "bob01", Password: "pass-123"}, true); err != nil {
@@ -47,7 +64,7 @@ func TestCreateUser_DuplicateUsername(t *testing.T) {
 
 func TestCreateUser_InvalidUsername(t *testing.T) {
 	services := setupTestServices(t)
-	userService := NewUserService(services.store)
+	userService := newTestUserService(t, services.store)
 	ctx := context.Background()
 
 	if _, err := userService.CreateUser(ctx, nil, CreateUserInput{Username: "ab", Password: "pass-123"}, true); !errors.Is(err, ErrInvalidUsername) {
@@ -60,7 +77,7 @@ func TestCreateUser_InvalidUsername(t *testing.T) {
 
 func TestCreateUser_RegistrationDisabledForSecondUser(t *testing.T) {
 	services := setupTestServices(t)
-	userService := NewUserService(services.store)
+	userService := newTestUserService(t, services.store)
 	ctx := context.Background()
 
 	admin, err := userService.CreateUser(ctx, nil, CreateUserInput{Username: "owner01", Password: "pass-123"}, true)
@@ -78,7 +95,7 @@ func TestCreateUser_RegistrationDisabledForSecondUser(t *testing.T) {
 
 func TestCreateUser_ValidateOnlyDoesNotPersist(t *testing.T) {
 	services := setupTestServices(t)
-	userService := NewUserService(services.store)
+	userService := newTestUserService(t, services.store)
 	ctx := context.Background()
 
 	user, err := userService.CreateUser(ctx, nil, CreateUserInput{
@@ -101,7 +118,7 @@ func TestCreateUser_ValidateOnlyDoesNotPersist(t *testing.T) {
 
 func TestCreateUser_AdminCanAssignAdminRole(t *testing.T) {
 	services := setupTestServices(t)
-	userService := NewUserService(services.store)
+	userService := newTestUserService(t, services.store)
 	ctx := context.Background()
 
 	admin, err := userService.CreateUser(ctx, nil, CreateUserInput{Username: "root01", Password: "pass-123"}, true)
@@ -127,7 +144,7 @@ func TestCreateUser_AdminCanAssignAdminRole(t *testing.T) {
 
 func TestCreateUser_EmptyPassword(t *testing.T) {
 	services := setupTestServices(t)
-	userService := NewUserService(services.store)
+	userService := newTestUserService(t, services.store)
 	ctx := context.Background()
 
 	if _, err := userService.CreateUser(ctx, nil, CreateUserInput{
@@ -140,7 +157,7 @@ func TestCreateUser_EmptyPassword(t *testing.T) {
 
 func TestSignInWithPassword_Success(t *testing.T) {
 	services := setupTestServices(t)
-	userService := NewUserService(services.store)
+	userService := newTestUserService(t, services.store)
 	ctx := context.Background()
 
 	created, err := userService.CreateUser(ctx, nil, CreateUserInput{
@@ -176,7 +193,7 @@ func TestSignInWithPassword_Success(t *testing.T) {
 
 func TestSignInWithPassword_InvalidCredentials(t *testing.T) {
 	services := setupTestServices(t)
-	userService := NewUserService(services.store)
+	userService := newTestUserService(t, services.store)
 	ctx := context.Background()
 
 	if _, err := userService.CreateUser(ctx, nil, CreateUserInput{
@@ -196,7 +213,7 @@ func TestSignInWithPassword_InvalidCredentials(t *testing.T) {
 
 func TestRefreshSession_RotatesRefreshToken(t *testing.T) {
 	services := setupTestServices(t)
-	userService := NewUserService(services.store)
+	userService := newTestUserService(t, services.store)
 	ctx := context.Background()
 
 	created, err := userService.CreateUser(ctx, nil, CreateUserInput{
@@ -234,9 +251,66 @@ func TestRefreshSession_RotatesRefreshToken(t *testing.T) {
 	}
 }
 
+func TestRefreshSession_SameRefreshTokenOnlyOneConcurrentRequestSucceeds(t *testing.T) {
+	services := setupTestServices(t)
+	userService := newTestUserService(t, services.store)
+	ctx := context.Background()
+
+	if _, err := userService.CreateUser(ctx, nil, CreateUserInput{
+		Username: "refresh-concurrent",
+		Password: "pass-123",
+	}, true); err != nil {
+		t.Fatalf("CreateUser() error = %v", err)
+	}
+
+	_, tokens, err := userService.SignInWithPassword(ctx, "refresh-concurrent", "pass-123")
+	if err != nil {
+		t.Fatalf("SignInWithPassword() error = %v", err)
+	}
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	successCount := 0
+	invalidCount := 0
+	var unexpectedErr error
+
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, rotated, refreshErr := userService.RefreshSession(ctx, tokens.RefreshToken)
+			mu.Lock()
+			defer mu.Unlock()
+			switch {
+			case refreshErr == nil:
+				successCount++
+				if rotated.RefreshToken == "" || rotated.AccessToken == "" {
+					unexpectedErr = errors.New("expected rotated tokens to be populated")
+				}
+			case errors.Is(refreshErr, ErrInvalidRefreshToken):
+				invalidCount++
+			default:
+				unexpectedErr = refreshErr
+			}
+		}()
+	}
+
+	close(start)
+	wg.Wait()
+
+	if unexpectedErr != nil {
+		t.Fatalf("unexpected concurrent refresh error: %v", unexpectedErr)
+	}
+	if successCount != 1 || invalidCount != 1 {
+		t.Fatalf("expected exactly one success and one invalid refresh, got success=%d invalid=%d", successCount, invalidCount)
+	}
+}
+
 func TestResolveAllowRegistration(t *testing.T) {
 	services := setupTestServices(t)
-	userService := NewUserService(services.store)
+	userService := newTestUserService(t, services.store)
 	ctx := context.Background()
 
 	allow, err := userService.ResolveAllowRegistration(ctx, true)
@@ -272,7 +346,7 @@ func TestResolveAllowRegistration(t *testing.T) {
 
 func TestCreateAccessTokenForUser(t *testing.T) {
 	services := setupTestServices(t)
-	userService := NewUserService(services.store)
+	userService := newTestUserService(t, services.store)
 	ctx := context.Background()
 
 	created, err := userService.CreateUser(ctx, nil, CreateUserInput{
@@ -313,7 +387,7 @@ func TestCreateAccessTokenForUser(t *testing.T) {
 
 func TestCreateAccessTokenForUserWithExpiry(t *testing.T) {
 	services := setupTestServices(t)
-	userService := NewUserService(services.store)
+	userService := newTestUserService(t, services.store)
 	ctx := context.Background()
 
 	created, err := userService.CreateUser(ctx, nil, CreateUserInput{
@@ -350,7 +424,7 @@ func TestCreateAccessTokenForUserWithExpiry(t *testing.T) {
 
 func TestCreateAccessTokenForUserWithExpiry_InvalidPastTime(t *testing.T) {
 	services := setupTestServices(t)
-	userService := NewUserService(services.store)
+	userService := newTestUserService(t, services.store)
 	ctx := context.Background()
 
 	created, err := userService.CreateUser(ctx, nil, CreateUserInput{
@@ -369,7 +443,7 @@ func TestCreateAccessTokenForUserWithExpiry_InvalidPastTime(t *testing.T) {
 
 func TestListAccessTokensForUser(t *testing.T) {
 	services := setupTestServices(t)
-	userService := NewUserService(services.store)
+	userService := newTestUserService(t, services.store)
 	ctx := context.Background()
 
 	created, err := userService.CreateUser(ctx, nil, CreateUserInput{
@@ -409,7 +483,7 @@ func TestListAccessTokensForUser(t *testing.T) {
 
 func TestRevokeAccessTokenByID(t *testing.T) {
 	services := setupTestServices(t)
-	userService := NewUserService(services.store)
+	userService := newTestUserService(t, services.store)
 	ctx := context.Background()
 
 	created, err := userService.CreateUser(ctx, nil, CreateUserInput{
@@ -448,7 +522,7 @@ func TestRevokeAccessTokenByID(t *testing.T) {
 
 func TestListUserChanges_UsesIncrementalWindowAndIdentifierForms(t *testing.T) {
 	services := setupTestServices(t)
-	userService := NewUserService(services.store)
+	userService := newTestUserService(t, services.store)
 	ctx := context.Background()
 
 	first, err := userService.CreateUser(ctx, nil, CreateUserInput{

@@ -10,6 +10,8 @@ import (
 
 type StorageBackend string
 
+const placeholderJWTSecret = "change-me-in-production"
+
 const (
 	StorageBackendLocal StorageBackend = "local"
 	StorageBackendS3    StorageBackend = "s3"
@@ -40,11 +42,11 @@ type Config struct {
 
 func Load() (Config, error) {
 	cfg := Config{
-		Addr:           env("APP_ADDR", ":12843"),
-		DBPath:         env("DB_PATH", "./data/keer.db"),
-		UploadsDir:     env("UPLOADS_DIR", "./data/uploads"),
-		BodyLimitMB:    envInt("HTTP_BODY_LIMIT_MB", 64),
-		Storage:        envStorageBackend("STORAGE_BACKEND", StorageBackendLocal),
+		Addr:        env("APP_ADDR", ":12843"),
+		DBPath:      env("DB_PATH", "./data/keer.db"),
+		UploadsDir:  env("UPLOADS_DIR", "./data/uploads"),
+		BodyLimitMB: envInt("HTTP_BODY_LIMIT_MB", 64),
+		Storage:     envStorageBackend("STORAGE_BACKEND", StorageBackendLocal),
 		S3: S3Config{
 			Endpoint:     env("S3_ENDPOINT", ""),
 			Region:       env("S3_REGION", ""),
@@ -55,7 +57,7 @@ func Load() (Config, error) {
 		},
 		AdminUsers:        envCSV("ADMIN_USERS"),
 		AllowRegistration: envBool("ALLOW_REGISTRATION", true),
-		JWTSecret:         env("JWT_SECRET", "change-me-in-production"),
+		JWTSecret:         env("JWT_SECRET", ""),
 		AccessTokenTTL:    envDuration("ACCESS_TOKEN_TTL", 15*time.Minute),
 		RefreshTokenTTL:   envDuration("REFRESH_TOKEN_TTL", 30*24*time.Hour),
 	}
@@ -66,6 +68,13 @@ func Load() (Config, error) {
 }
 
 func (c Config) Validate() error {
+	switch strings.TrimSpace(c.JWTSecret) {
+	case "":
+		return fmt.Errorf("jwt secret is required")
+	case placeholderJWTSecret:
+		return fmt.Errorf("jwt secret must not use placeholder value %q", placeholderJWTSecret)
+	}
+
 	switch c.Storage {
 	case StorageBackendLocal:
 		return nil

@@ -31,17 +31,24 @@ type accessTokenClaims struct {
 	ExpiresAt int64  `json:"exp"`
 }
 
-func (s *UserService) ConfigureAuth(jwtSecret string, accessTokenTTL time.Duration, refreshTokenTTL time.Duration) {
+const placeholderJWTSecret = "change-me-in-production"
+
+func (s *UserService) ConfigureAuth(jwtSecret string, accessTokenTTL time.Duration, refreshTokenTTL time.Duration) error {
 	trimmedSecret := strings.TrimSpace(jwtSecret)
-	if trimmedSecret != "" {
-		s.jwtSecret = []byte(trimmedSecret)
+	switch trimmedSecret {
+	case "":
+		return fmt.Errorf("jwt secret is required")
+	case placeholderJWTSecret:
+		return fmt.Errorf("jwt secret must not use placeholder value %q", placeholderJWTSecret)
 	}
+	s.jwtSecret = []byte(trimmedSecret)
 	if accessTokenTTL > 0 {
 		s.accessTokenTTL = accessTokenTTL
 	}
 	if refreshTokenTTL > 0 {
 		s.refreshTokenTTL = refreshTokenTTL
 	}
+	return nil
 }
 
 func (s *UserService) AuthenticateAccessToken(ctx context.Context, rawToken string) (models.User, error) {
@@ -62,23 +69,46 @@ func (s *UserService) RefreshSession(ctx context.Context, rawRefreshToken string
 		return models.User{}, SessionTokens{}, ErrInvalidRefreshToken
 	}
 
-	user, refreshToken, err := s.store.GetUserByRefreshToken(ctx, rawRefreshToken)
-	if err != nil {
+	now := time.Now().UTC()
+	accessExpiresAt := now.Add(s.accessTokenTTL)
+	refreshExpiresAt := now.Add(s.refreshTokenTTL)
+
+	var (
+		user           models.User
+		nextRefreshRaw string
+		rotatedRefresh models.RefreshToken
+		err            error
+	)
+	for i := 0; i < 5; i++ {
+		nextRefreshRaw, err = generateSessionRefreshToken()
+		if err != nil {
+			return models.User{}, SessionTokens{}, err
+		}
+		user, rotatedRefresh, err = s.store.RotateRefreshToken(ctx, rawRefreshToken, nextRefreshRaw, refreshExpiresAt)
+		if err == nil {
+			break
+		}
 		if errors.Is(err, sql.ErrNoRows) {
 			return models.User{}, SessionTokens{}, ErrInvalidRefreshToken
 		}
-		return models.User{}, SessionTokens{}, err
+		if !isUniqueConstraintErr(err) {
+			return models.User{}, SessionTokens{}, err
+		}
 	}
-	_ = s.store.TouchRefreshToken(ctx, refreshToken.ID)
+	if err != nil {
+		return models.User{}, SessionTokens{}, ErrTokenAlreadyExists
+	}
 
-	tokens, err := s.issueSessionTokens(ctx, user.ID)
+	accessToken, err := s.buildAccessToken(user.ID, now, accessExpiresAt)
 	if err != nil {
 		return models.User{}, SessionTokens{}, err
 	}
-	if err := s.store.RevokeRefreshToken(ctx, refreshToken.ID); err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return models.User{}, SessionTokens{}, err
-	}
-	return user, tokens, nil
+	return user, SessionTokens{
+		AccessToken:           accessToken,
+		AccessTokenExpiresAt:  accessExpiresAt,
+		RefreshToken:          nextRefreshRaw,
+		RefreshTokenExpiresAt: rotatedRefresh.ExpiresAt,
+	}, nil
 }
 
 func (s *UserService) issueSessionTokens(ctx context.Context, userID int64) (SessionTokens, error) {
@@ -117,6 +147,10 @@ func (s *UserService) issueSessionTokens(ctx context.Context, userID int64) (Ses
 }
 
 func (s *UserService) buildAccessToken(userID int64, issuedAt time.Time, expiresAt time.Time) (string, error) {
+	if len(s.jwtSecret) == 0 {
+		return "", fmt.Errorf("jwt secret is not configured")
+	}
+
 	headerJSON, err := json.Marshal(map[string]string{
 		"alg": "HS256",
 		"typ": "JWT",
@@ -146,6 +180,9 @@ func (s *UserService) buildAccessToken(userID int64, issuedAt time.Time, expires
 func (s *UserService) parseAccessToken(rawToken string) (int64, error) {
 	rawToken = strings.TrimSpace(rawToken)
 	if rawToken == "" {
+		return 0, sql.ErrNoRows
+	}
+	if len(s.jwtSecret) == 0 {
 		return 0, sql.ErrNoRows
 	}
 	parts := strings.Split(rawToken, ".")

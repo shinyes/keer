@@ -443,6 +443,9 @@ func newTestAppWithUserService(t *testing.T, allowRegistration bool, withAuthFix
 
 	sqlStore := store.New(sqliteDB)
 	userService := service.NewUserService(sqlStore)
+	if err := userService.ConfigureAuth("test-jwt-secret", 0, 0); err != nil {
+		t.Fatalf("ConfigureAuth() error = %v", err)
+	}
 	if withAuthFixture {
 		if _, err := seedTestAuthFixture(context.Background(), sqlStore); err != nil {
 			t.Fatalf("seedTestAuthFixture() error = %v", err)

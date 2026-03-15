@@ -44,7 +44,10 @@ func Build(ctx context.Context, cfg config.Config) (*Container, func() error, er
 		return nil, nil, err
 	}
 	userService := service.NewUserService(sqlStore)
-	userService.ConfigureAuth(cfg.JWTSecret, cfg.AccessTokenTTL, cfg.RefreshTokenTTL)
+	if err := userService.ConfigureAuth(cfg.JWTSecret, cfg.AccessTokenTTL, cfg.RefreshTokenTTL); err != nil {
+		_ = cleanup()
+		return nil, nil, err
+	}
 
 	memoService := service.NewMemoService(sqlStore)
 	groupService := service.NewGroupService(sqlStore)

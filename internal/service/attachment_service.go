@@ -207,7 +207,7 @@ func (s *AttachmentService) CreateAttachment(ctx context.Context, userID int64, 
 
 	if memoID != nil {
 		if err := s.attachToMemo(ctx, *memoID, attachment.ID); err != nil {
-			return models.Attachment{}, err
+			return models.Attachment{}, s.rollbackCreatedAttachment(ctx, userID, attachment.ID, err)
 		}
 	}
 
@@ -780,15 +780,15 @@ func (s *AttachmentService) CompleteAttachmentUploadSession(ctx context.Context,
 	if session.MemoName != nil {
 		memoID, err := parseMemoID(*session.MemoName)
 		if err != nil {
-			return models.Attachment{}, err
+			return models.Attachment{}, s.rollbackCreatedAttachment(ctx, userID, attachment.ID, err)
 		}
 		if err := s.attachToMemo(ctx, memoID, attachment.ID); err != nil {
-			return models.Attachment{}, err
+			return models.Attachment{}, s.rollbackCreatedAttachment(ctx, userID, attachment.ID, err)
 		}
 	}
 
 	if err := s.store.DeleteAttachmentUploadSessionByID(ctx, session.ID); err != nil {
-		return models.Attachment{}, err
+		return models.Attachment{}, s.rollbackCreatedAttachment(ctx, userID, attachment.ID, err)
 	}
 	_ = os.Remove(session.TempPath)
 	if session.ThumbnailTempPath != "" {
@@ -849,15 +849,15 @@ func (s *AttachmentService) completeDirectAttachmentUploadSession(
 	if session.MemoName != nil {
 		memoID, err := parseMemoID(*session.MemoName)
 		if err != nil {
-			return models.Attachment{}, err
+			return models.Attachment{}, s.rollbackCreatedAttachment(ctx, userID, attachment.ID, err)
 		}
 		if err := s.attachToMemo(ctx, memoID, attachment.ID); err != nil {
-			return models.Attachment{}, err
+			return models.Attachment{}, s.rollbackCreatedAttachment(ctx, userID, attachment.ID, err)
 		}
 	}
 
 	if err := s.store.DeleteAttachmentUploadSessionByID(ctx, session.ID); err != nil {
-		return models.Attachment{}, err
+		return models.Attachment{}, s.rollbackCreatedAttachment(ctx, userID, attachment.ID, err)
 	}
 	if session.ThumbnailTempPath != "" {
 		_ = os.Remove(session.ThumbnailTempPath)
@@ -921,15 +921,15 @@ func (s *AttachmentService) completeMultipartAttachmentUploadSession(
 	if session.MemoName != nil {
 		memoID, err := parseMemoID(*session.MemoName)
 		if err != nil {
-			return models.Attachment{}, err
+			return models.Attachment{}, s.rollbackCreatedAttachment(ctx, userID, attachment.ID, err)
 		}
 		if err := s.attachToMemo(ctx, memoID, attachment.ID); err != nil {
-			return models.Attachment{}, err
+			return models.Attachment{}, s.rollbackCreatedAttachment(ctx, userID, attachment.ID, err)
 		}
 	}
 
 	if err := s.store.DeleteAttachmentUploadSessionByID(ctx, session.ID); err != nil {
-		return models.Attachment{}, err
+		return models.Attachment{}, s.rollbackCreatedAttachment(ctx, userID, attachment.ID, err)
 	}
 	if session.ThumbnailTempPath != "" {
 		_ = os.Remove(session.ThumbnailTempPath)
@@ -939,6 +939,16 @@ func (s *AttachmentService) completeMultipartAttachmentUploadSession(
 
 func (s *AttachmentService) ListAttachments(ctx context.Context, userID int64) ([]models.Attachment, error) {
 	return s.store.ListAttachmentsByCreator(ctx, userID)
+}
+
+func (s *AttachmentService) rollbackCreatedAttachment(ctx context.Context, userID int64, attachmentID int64, cause error) error {
+	if attachmentID <= 0 || cause == nil {
+		return cause
+	}
+	if cleanupErr := s.DeleteAttachment(ctx, userID, attachmentID); cleanupErr != nil && !errors.Is(cleanupErr, sql.ErrNoRows) {
+		return fmt.Errorf("%w (rollback attachment cleanup failed: %v)", cause, cleanupErr)
+	}
+	return cause
 }
 
 func (s *AttachmentService) DeleteAttachment(ctx context.Context, userID int64, attachmentID int64) error {

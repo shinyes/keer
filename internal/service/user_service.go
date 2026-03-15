@@ -99,7 +99,6 @@ type UpdateUserGeneralSettingsInput struct {
 func NewUserService(s *store.SQLStore) *UserService {
 	return &UserService{
 		store:           s,
-		jwtSecret:       []byte("change-me-in-production"),
 		accessTokenTTL:  defaultAccessTokenTTL,
 		refreshTokenTTL: defaultRefreshTokenTTL,
 	}
@@ -531,6 +530,7 @@ func (s *UserService) CreateUser(ctx context.Context, creator *models.User, inpu
 	username := normalizeUsername(input.Username)
 	password := strings.TrimSpace(input.Password)
 	role := normalizeUserRole(input.Role)
+	isSuperUser := creator != nil && isSuperUserRole(creator.Role)
 
 	if !usernamePattern.MatchString(username) {
 		return models.User{}, ErrInvalidUsername
@@ -542,24 +542,20 @@ func (s *UserService) CreateUser(ctx context.Context, creator *models.User, inpu
 		return models.User{}, ErrInvalidRole
 	}
 
-	totalUsers, err := s.store.CountUsers(ctx)
-	if err != nil {
-		return models.User{}, err
-	}
-	isFirstUser := totalUsers == 0
-	isSuperUser := creator != nil && isSuperUserRole(creator.Role)
-	if !isFirstUser && !allowRegistration && !isSuperUser {
-		return models.User{}, ErrRegistrationDisabled
-	}
-
-	roleToAssign := "USER"
-	if isFirstUser {
-		roleToAssign = "ADMIN"
-	} else if isSuperUser && role != "" {
-		roleToAssign = role
-	}
-
 	if input.ValidateOnly {
+		totalUsers, err := s.store.CountUsers(ctx)
+		if err != nil {
+			return models.User{}, err
+		}
+		roleToAssign := "USER"
+		if totalUsers == 0 {
+			roleToAssign = "ADMIN"
+		} else if isSuperUser && role != "" {
+			roleToAssign = role
+		}
+		if totalUsers > 0 && !allowRegistration && !isSuperUser {
+			return models.User{}, ErrRegistrationDisabled
+		}
 		return models.User{
 			Username:          username,
 			Role:              roleToAssign,
@@ -578,8 +574,18 @@ func (s *UserService) CreateUser(ctx context.Context, creator *models.User, inpu
 		return models.User{}, fmt.Errorf("hash password: %w", err)
 	}
 
-	user, err := s.store.CreateUserWithProfile(ctx, username, string(passwordHash), roleToAssign)
+	user, err := s.store.CreateUserWithProfileSubjectToRegistration(
+		ctx,
+		username,
+		string(passwordHash),
+		role,
+		allowRegistration,
+		isSuperUser,
+	)
 	if err != nil {
+		if errors.Is(err, store.ErrRegistrationNotAllowed) {
+			return models.User{}, ErrRegistrationDisabled
+		}
 		if isUniqueConstraintErr(err) {
 			return models.User{}, ErrUsernameAlreadyExists
 		}

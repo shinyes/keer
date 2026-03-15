@@ -84,7 +84,7 @@ var _ storage.Store = (*memoryAvatarStore)(nil)
 
 func TestUpdateUserAvatarThumbnail_StoresAvatarToDedicatedPath(t *testing.T) {
 	services := setupTestServices(t)
-	userService := NewUserService(services.store)
+	userService := newTestUserService(t, services.store)
 	avatarStore := newMemoryAvatarStore()
 	userService.SetAvatarStorageRouter(storage.NewRouter(storage.TypeLocal, avatarStore))
 	ctx := context.Background()
@@ -111,7 +111,7 @@ func TestUpdateUserAvatarThumbnail_StoresAvatarToDedicatedPath(t *testing.T) {
 
 func TestUpdateUserAvatarThumbnail_WriteFailureDoesNotUpdateAvatarURL(t *testing.T) {
 	services := setupTestServices(t)
-	userService := NewUserService(services.store)
+	userService := newTestUserService(t, services.store)
 	avatarStore := newMemoryAvatarStore()
 	avatarStore.putErr = errors.New("disk full")
 	userService.SetAvatarStorageRouter(storage.NewRouter(storage.TypeLocal, avatarStore))
@@ -138,7 +138,7 @@ func TestUpdateUserAvatarThumbnail_WriteFailureDoesNotUpdateAvatarURL(t *testing
 
 func TestUpdateUserAvatarThumbnail_RejectsLargeDimensions(t *testing.T) {
 	services := setupTestServices(t)
-	userService := NewUserService(services.store)
+	userService := newTestUserService(t, services.store)
 	avatarStore := newMemoryAvatarStore()
 	userService.SetAvatarStorageRouter(storage.NewRouter(storage.TypeLocal, avatarStore))
 	ctx := context.Background()
@@ -159,7 +159,7 @@ func TestUpdateUserAvatarThumbnail_RejectsLargeDimensions(t *testing.T) {
 
 func TestClearUserAvatar_DeleteFailureDoesNotUpdateAvatarURL(t *testing.T) {
 	services := setupTestServices(t)
-	userService := NewUserService(services.store)
+	userService := newTestUserService(t, services.store)
 	avatarStore := newMemoryAvatarStore()
 	userService.SetAvatarStorageRouter(storage.NewRouter(storage.TypeLocal, avatarStore))
 	ctx := context.Background()
