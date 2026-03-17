@@ -187,6 +187,35 @@ type GroupMessage struct {
 	Tags            []string
 }
 
+type SyncDomain string
+
+const (
+	SyncDomainMemos         SyncDomain = "MEMOS"
+	SyncDomainUsers         SyncDomain = "USERS"
+	SyncDomainGroups        SyncDomain = "GROUPS"
+	SyncDomainGroupMessages SyncDomain = "GROUP_MESSAGES"
+	SyncDomainSettings      SyncDomain = "SETTINGS"
+)
+
+func (d SyncDomain) IsValid() bool {
+	return d == SyncDomainMemos ||
+		d == SyncDomainUsers ||
+		d == SyncDomainGroups ||
+		d == SyncDomainGroupMessages ||
+		d == SyncDomainSettings
+}
+
+type SyncEvent struct {
+	ID             int64
+	Domain         SyncDomain
+	ActorUserID    int64
+	TargetUserID   int64
+	GroupID        int64
+	MemoID         int64
+	GroupMessageID int64
+	EventTime      time.Time
+}
+
 type GroupKeyVersion struct {
 	GroupID    int64
 	Version    int

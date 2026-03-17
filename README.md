@@ -305,12 +305,19 @@ Authorization: Bearer <accessToken>
 - `PATCH /api/v1/users/{name}`
 - `GET /api/v1/users/{name}/settings/GENERAL`
 - `GET /api/v1/users/batch`
-- `GET /api/v1/users/changes`
+- `GET /api/v1/users/changes`（保留）
+
+同步接口：
+
+- `POST /api/v1/sync/pull`
+  - 请求体：`cursor`、`domains`、`groupScopes`、`limit`
+  - 响应体：`nextCursor`、`hasMore`、`patches{memos,users,groups,groupMessages,settings}`
+  - 同步域：`MEMOS` / `USERS` / `GROUPS` / `GROUP_MESSAGES` / `SETTINGS`
 
 Memo 接口：
 
 - `GET /api/v1/memos`
-- `GET /api/v1/memos/changes`
+- `GET /api/v1/memos/changes`（保留）
 - `POST /api/v1/memos`
 - `PATCH /api/v1/memos/{id}`
 - `DELETE /api/v1/memos/{id}`

@@ -396,7 +396,7 @@ func newTestAppWithUserService(t *testing.T, allowRegistration bool, withAuthFix
 	cfg := config.Config{
 		AllowRegistration: allowRegistration,
 	}
-	return NewRouter(cfg, userService, memoService, groupService, attachmentService), userService
+	return NewRouter(cfg, sqlStore, userService, memoService, groupService, attachmentService), userService
 }
 
 func seedTestAuthFixture(ctx context.Context, sqlStore *store.SQLStore) (string, error) {

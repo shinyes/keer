@@ -18,10 +18,12 @@ import (
 	"github.com/shinyes/keer/internal/config"
 	"github.com/shinyes/keer/internal/models"
 	"github.com/shinyes/keer/internal/service"
+	"github.com/shinyes/keer/internal/store"
 )
 
 func NewRouter(
 	cfg config.Config,
+	sqlStore *store.SQLStore,
 	userService *service.UserService,
 	memoService *service.MemoService,
 	groupService *service.GroupService,
@@ -163,6 +165,7 @@ func NewRouter(
 	registerMemoRoutes(api, memoService, buildAPIMemo)
 	registerGroupRoutes(api, userService, groupService)
 	registerAdminRoutes(api, attachmentService)
+	registerSyncRoutes(api, sqlStore, userService, memoService, groupService, buildAPIMemo)
 
 	api.Get("/attachments", func(c *fiber.Ctx) error {
 		currentUser := CurrentUser(c)

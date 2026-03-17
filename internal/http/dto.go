@@ -97,6 +97,56 @@ type listMemoChangesResponse struct {
 	SyncAnchor       string    `json:"syncAnchor"`
 }
 
+type syncPullRequest struct {
+	Cursor      string   `json:"cursor"`
+	Domains     []string `json:"domains"`
+	GroupScopes []string `json:"groupScopes"`
+	Limit       int      `json:"limit"`
+}
+
+type syncPullResponse struct {
+	NextCursor string          `json:"nextCursor"`
+	HasMore    bool            `json:"hasMore"`
+	Patches    syncPullPatches `json:"patches"`
+}
+
+type syncPullPatches struct {
+	Memos         syncPullMemoPatch          `json:"memos"`
+	Users         syncPullUserPatch          `json:"users"`
+	Groups        syncPullGroupPatch         `json:"groups"`
+	GroupMessages syncPullGroupMessagesPatch `json:"groupMessages"`
+	Settings      syncPullSettingsPatch      `json:"settings"`
+}
+
+type syncPullMemoPatch struct {
+	Upserts []apiMemo `json:"upserts"`
+	Deletes []string  `json:"deletes"`
+}
+
+type syncPullUserPatch struct {
+	Upserts []apiUser `json:"upserts"`
+}
+
+type syncPullGroupPatch struct {
+	Directory []apiGroup `json:"directory"`
+}
+
+type syncPullGroupMessagesPatch struct {
+	Groups []syncPullGroupMessagesGroupPatch `json:"groups"`
+}
+
+type syncPullGroupMessagesGroupPatch struct {
+	Group       string            `json:"group"`
+	FullReplace bool              `json:"fullReplace"`
+	HasUnread   bool              `json:"hasUnread"`
+	Messages    []apiGroupMessage `json:"messages"`
+	Tags        []string          `json:"tags"`
+}
+
+type syncPullSettingsPatch struct {
+	GeneralSetting *generalSetting `json:"generalSetting,omitempty"`
+}
+
 type apiWrappedKeySlot struct {
 	SlotType      string `json:"slotType"`
 	SlotRef       string `json:"slotRef"`
