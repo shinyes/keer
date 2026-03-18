@@ -22,6 +22,7 @@ func getUserGeneralSettingsWithExecutor(
 	var memoVisibility string
 	var memoEditGesture sql.NullString
 	var memoColumnsJSON sql.NullString
+	var exploreDrawerEntriesJSON sql.NullString
 	var createTime sql.NullString
 	var updateTime sql.NullString
 	err := executor.QueryRowContext(
@@ -31,6 +32,7 @@ func getUserGeneralSettingsWithExecutor(
 			u.default_visibility,
 			ugs.memo_edit_gesture,
 			ugs.memo_columns_json,
+			ugs.explore_drawer_entries_json,
 			ugs.create_time,
 			ugs.update_time
 		FROM users u
@@ -42,6 +44,7 @@ func getUserGeneralSettingsWithExecutor(
 		&memoVisibility,
 		&memoEditGesture,
 		&memoColumnsJSON,
+		&exploreDrawerEntriesJSON,
 		&createTime,
 		&updateTime,
 	)
@@ -62,6 +65,13 @@ func getUserGeneralSettingsWithExecutor(
 		}
 	} else {
 		settings.MemoColumns = []models.MemoColumnConfig{}
+	}
+	if exploreDrawerEntriesJSON.Valid && exploreDrawerEntriesJSON.String != "" {
+		if err := json.Unmarshal([]byte(exploreDrawerEntriesJSON.String), &settings.ExploreDrawerEntries); err != nil {
+			return models.UserGeneralSettings{}, err
+		}
+	} else {
+		settings.ExploreDrawerEntries = []models.ExploreDrawerEntryConfig{}
 	}
 
 	if createTime.Valid && createTime.String != "" {
@@ -113,6 +123,10 @@ func updateUserGeneralSettingsWithExecutor(
 	if err != nil {
 		return err
 	}
+	exploreDrawerEntriesJSON, err := json.Marshal(settings.ExploreDrawerEntries)
+	if err != nil {
+		return err
+	}
 
 	res, err := executor.ExecContext(
 		ctx,
@@ -137,15 +151,17 @@ func updateUserGeneralSettingsWithExecutor(
 	_, err = executor.ExecContext(
 		ctx,
 		`INSERT INTO user_general_settings (
-			user_id, memo_edit_gesture, memo_columns_json, create_time, update_time
-		) VALUES (?, ?, ?, ?, ?)
+			user_id, memo_edit_gesture, memo_columns_json, explore_drawer_entries_json, create_time, update_time
+		) VALUES (?, ?, ?, ?, ?, ?)
 		ON CONFLICT(user_id) DO UPDATE SET
 			memo_edit_gesture = excluded.memo_edit_gesture,
 			memo_columns_json = excluded.memo_columns_json,
+			explore_drawer_entries_json = excluded.explore_drawer_entries_json,
 			update_time = excluded.update_time`,
 		settings.UserID,
 		settings.MemoEditGesture,
 		string(columnsJSON),
+		string(exploreDrawerEntriesJSON),
 		now,
 		now,
 	)

@@ -76,6 +76,7 @@ func Migrate(db *sql.DB) error {
 			user_id INTEGER PRIMARY KEY,
 			memo_edit_gesture TEXT NOT NULL DEFAULT 'NONE',
 			memo_columns_json TEXT NOT NULL DEFAULT '[]',
+			explore_drawer_entries_json TEXT NOT NULL DEFAULT '[]',
 			create_time TEXT NOT NULL,
 			update_time TEXT NOT NULL,
 			FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -592,6 +593,14 @@ func Migrate(db *sql.DB) error {
 		"user_encryption_keys",
 		"algorithms",
 		"TEXT NOT NULL DEFAULT ''",
+	); err != nil {
+		return fmt.Errorf("migration failed: %w", err)
+	}
+	if err := ensureColumn(
+		db,
+		"user_general_settings",
+		"explore_drawer_entries_json",
+		"TEXT NOT NULL DEFAULT '[]'",
 	); err != nil {
 		return fmt.Errorf("migration failed: %w", err)
 	}

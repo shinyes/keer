@@ -376,11 +376,12 @@ type userSettingResponse struct {
 }
 
 type generalSetting struct {
-	MemoVisibility  string                `json:"memoVisibility,omitempty"`
-	MemoEditGesture string                `json:"memoEditGesture,omitempty"`
-	MemoColumns     []apiMemoColumnConfig `json:"memoColumns,omitempty"`
-	Locale          string                `json:"locale,omitempty"`
-	Theme           string                `json:"theme,omitempty"`
+	MemoVisibility       string                        `json:"memoVisibility,omitempty"`
+	MemoEditGesture      string                        `json:"memoEditGesture,omitempty"`
+	MemoColumns          []apiMemoColumnConfig         `json:"memoColumns,omitempty"`
+	ExploreDrawerEntries []apiExploreDrawerEntryConfig `json:"exploreDrawerEntries,omitempty"`
+	Locale               string                        `json:"locale,omitempty"`
+	Theme                string                        `json:"theme,omitempty"`
 }
 
 type apiMemoColumnConfig struct {
@@ -391,14 +392,20 @@ type apiMemoColumnConfig struct {
 	PinnedMemoNames []string `json:"pinnedMemoNames"`
 }
 
+type apiExploreDrawerEntryConfig struct {
+	EntryID          string `json:"entryId"`
+	VisibleInExplore bool   `json:"visibleInExplore"`
+}
+
 type updateUserGeneralSettingRequest struct {
 	GeneralSetting updateUserGeneralSetting `json:"generalSetting"`
 }
 
 type updateUserGeneralSetting struct {
-	MemoVisibility  string                `json:"memoVisibility"`
-	MemoEditGesture string                `json:"memoEditGesture"`
-	MemoColumns     []apiMemoColumnConfig `json:"memoColumns"`
+	MemoVisibility       string                        `json:"memoVisibility"`
+	MemoEditGesture      string                        `json:"memoEditGesture"`
+	MemoColumns          []apiMemoColumnConfig         `json:"memoColumns"`
+	ExploreDrawerEntries []apiExploreDrawerEntryConfig `json:"exploreDrawerEntries"`
 }
 
 type userEncryptionSettingResponse struct {

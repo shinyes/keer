@@ -38,6 +38,9 @@ func TestGetUserGeneralSetting_Defaults(t *testing.T) {
 	if len(payload.GeneralSetting.MemoColumns) != 0 {
 		t.Fatalf("expected empty default memo columns, got %d", len(payload.GeneralSetting.MemoColumns))
 	}
+	if len(payload.GeneralSetting.ExploreDrawerEntries) != 0 {
+		t.Fatalf("expected empty default explore drawer entries, got %d", len(payload.GeneralSetting.ExploreDrawerEntries))
+	}
 }
 
 func TestPutUserGeneralSetting_RoundTrip(t *testing.T) {
@@ -59,6 +62,20 @@ func TestPutUserGeneralSetting_RoundTrip(t *testing.T) {
 					"name":            "Life",
 					"requiredTags":    []string{"life"},
 					"visibleInDrawer": false,
+				},
+			},
+			"exploreDrawerEntries": []map[string]any{
+				{
+					"entryId":          "direct:2",
+					"visibleInExplore": false,
+				},
+				{
+					"entryId":          "group:3",
+					"visibleInExplore": true,
+				},
+				{
+					"entryId":          "direct:2",
+					"visibleInExplore": true,
 				},
 			},
 		},
@@ -94,6 +111,9 @@ func TestPutUserGeneralSetting_RoundTrip(t *testing.T) {
 	if got := putPayload.GeneralSetting.MemoColumns[0].RequiredTags; len(got) != 2 || got[0] != "work" || got[1] != "urgent" {
 		t.Fatalf("expected normalized tags [work urgent], got %#v", got)
 	}
+	if len(putPayload.GeneralSetting.ExploreDrawerEntries) != 2 {
+		t.Fatalf("expected 2 explore drawer entries, got %d", len(putPayload.GeneralSetting.ExploreDrawerEntries))
+	}
 
 	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/users/1/settings/GENERAL", nil)
 	getReq.Header.Set("Authorization", "Bearer demo-token")
@@ -117,6 +137,9 @@ func TestPutUserGeneralSetting_RoundTrip(t *testing.T) {
 	}
 	if len(getPayload.GeneralSetting.MemoColumns) != 2 {
 		t.Fatalf("expected persisted 2 memo columns, got %d", len(getPayload.GeneralSetting.MemoColumns))
+	}
+	if len(getPayload.GeneralSetting.ExploreDrawerEntries) != 2 {
+		t.Fatalf("expected persisted 2 explore drawer entries, got %d", len(getPayload.GeneralSetting.ExploreDrawerEntries))
 	}
 }
 

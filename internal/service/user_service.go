@@ -89,9 +89,10 @@ type UpsertUserEncryptionKeyInput struct {
 }
 
 type UpdateUserGeneralSettingsInput struct {
-	MemoVisibility  string
-	MemoEditGesture string
-	MemoColumns     []models.MemoColumnConfig
+	MemoVisibility       string
+	MemoEditGesture      string
+	MemoColumns          []models.MemoColumnConfig
+	ExploreDrawerEntries []models.ExploreDrawerEntryConfig
 }
 
 func NewUserService(s *store.SQLStore) *UserService {
@@ -265,10 +266,11 @@ func normalizeUserGeneralSettingsInput(
 	}
 
 	return models.UserGeneralSettings{
-		UserID:          userID,
-		MemoVisibility:  visibility,
-		MemoEditGesture: gesture,
-		MemoColumns:     columns,
+		UserID:               userID,
+		MemoVisibility:       visibility,
+		MemoEditGesture:      gesture,
+		MemoColumns:          columns,
+		ExploreDrawerEntries: normalizeExploreDrawerEntries(input.ExploreDrawerEntries),
 	}, nil
 }
 
@@ -302,6 +304,26 @@ func normalizeMemoColumnMemoNames(names []string) []string {
 		}
 		seen[name] = struct{}{}
 		normalized = append(normalized, name)
+	}
+	return normalized
+}
+
+func normalizeExploreDrawerEntries(entries []models.ExploreDrawerEntryConfig) []models.ExploreDrawerEntryConfig {
+	normalized := make([]models.ExploreDrawerEntryConfig, 0, len(entries))
+	seen := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		entryID := strings.TrimSpace(entry.EntryID)
+		if entryID == "" {
+			continue
+		}
+		if _, exists := seen[entryID]; exists {
+			continue
+		}
+		seen[entryID] = struct{}{}
+		normalized = append(normalized, models.ExploreDrawerEntryConfig{
+			EntryID:          entryID,
+			VisibleInExplore: entry.VisibleInExplore,
+		})
 	}
 	return normalized
 }

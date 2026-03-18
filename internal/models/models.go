@@ -76,13 +76,19 @@ type MemoColumnConfig struct {
 	PinnedMemoNames []string
 }
 
+type ExploreDrawerEntryConfig struct {
+	EntryID          string
+	VisibleInExplore bool
+}
+
 type UserGeneralSettings struct {
-	UserID          int64
-	MemoVisibility  Visibility
-	MemoEditGesture MemoEditGesture
-	MemoColumns     []MemoColumnConfig
-	CreateTime      time.Time
-	UpdateTime      time.Time
+	UserID               int64
+	MemoVisibility       Visibility
+	MemoEditGesture      MemoEditGesture
+	MemoColumns          []MemoColumnConfig
+	ExploreDrawerEntries []ExploreDrawerEntryConfig
+	CreateTime           time.Time
+	UpdateTime           time.Time
 }
 
 type UserEncryptionKey struct {

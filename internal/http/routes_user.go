@@ -125,9 +125,10 @@ func registerUserRoutes(
 			return badRequest(c, "invalid request body")
 		}
 		settings, err := userService.UpdateUserGeneralSettings(c.Context(), user.ID, service.UpdateUserGeneralSettingsInput{
-			MemoVisibility:  req.GeneralSetting.MemoVisibility,
-			MemoEditGesture: req.GeneralSetting.MemoEditGesture,
-			MemoColumns:     toModelMemoColumns(req.GeneralSetting.MemoColumns),
+			MemoVisibility:       req.GeneralSetting.MemoVisibility,
+			MemoEditGesture:      req.GeneralSetting.MemoEditGesture,
+			MemoColumns:          toModelMemoColumns(req.GeneralSetting.MemoColumns),
+			ExploreDrawerEntries: toModelExploreDrawerEntries(req.GeneralSetting.ExploreDrawerEntries),
 		})
 		if err != nil {
 			return badRequest(c, err.Error())
@@ -471,9 +472,10 @@ func registerUserRoutes(
 
 func toAPIGeneralSetting(settings models.UserGeneralSettings) generalSetting {
 	return generalSetting{
-		MemoVisibility:  string(settings.MemoVisibility),
-		MemoEditGesture: string(settings.MemoEditGesture),
-		MemoColumns:     toAPIMemoColumns(settings.MemoColumns),
+		MemoVisibility:       string(settings.MemoVisibility),
+		MemoEditGesture:      string(settings.MemoEditGesture),
+		MemoColumns:          toAPIMemoColumns(settings.MemoColumns),
+		ExploreDrawerEntries: toAPIExploreDrawerEntries(settings.ExploreDrawerEntries),
 	}
 }
 
@@ -500,6 +502,28 @@ func toModelMemoColumns(columns []apiMemoColumnConfig) []models.MemoColumnConfig
 			RequiredTags:    column.RequiredTags,
 			VisibleInDrawer: column.VisibleInDrawer,
 			PinnedMemoNames: column.PinnedMemoNames,
+		})
+	}
+	return result
+}
+
+func toAPIExploreDrawerEntries(entries []models.ExploreDrawerEntryConfig) []apiExploreDrawerEntryConfig {
+	result := make([]apiExploreDrawerEntryConfig, 0, len(entries))
+	for _, entry := range entries {
+		result = append(result, apiExploreDrawerEntryConfig{
+			EntryID:          entry.EntryID,
+			VisibleInExplore: entry.VisibleInExplore,
+		})
+	}
+	return result
+}
+
+func toModelExploreDrawerEntries(entries []apiExploreDrawerEntryConfig) []models.ExploreDrawerEntryConfig {
+	result := make([]models.ExploreDrawerEntryConfig, 0, len(entries))
+	for _, entry := range entries {
+		result = append(result, models.ExploreDrawerEntryConfig{
+			EntryID:          entry.EntryID,
+			VisibleInExplore: entry.VisibleInExplore,
 		})
 	}
 	return result
