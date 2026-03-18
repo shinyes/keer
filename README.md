@@ -24,7 +24,7 @@ Keer 是一个使用 Go 开发的轻量级后端服务，提供用户、Memo、�
 
 ## 环境要求
 
-- Go `1.25.5` 或兼容版本
+- Go `1.25.8` 或兼容版本
 - Windows / Linux / macOS
 - Docker（如果使用容器部署）
 
@@ -145,7 +145,7 @@ docker run --rm -it \
 ```yaml
 services:
   keer:
-    image: ghcr.io/shinyes/keer:v3.1.0
+    image: ghcr.io/shinyes/keer:<latest-release-tag>
     container_name: keer
     restart: unless-stopped
     ports:
@@ -160,6 +160,8 @@ services:
 volumes:
   keer-data:
 ```
+
+其中 `<latest-release-tag>` 请从仓库 GitHub Releases 中复制最新发布的 tag。
 
 启动：
 
@@ -192,7 +194,7 @@ docker compose down
 
 1. 先正常注册一个账号，例如 `alice`
 2. 重启服务时设置 `ADMIN_USERS=alice`
-3. 该账号重新登录后，就会在 Android 设置页看到“管理员”分组
+3. 使用最新版 Android 客户端，重新登录该账号后，就会在设置页看到“管理员”分组
 
 当前管理员功能：
 
@@ -200,6 +202,8 @@ docker compose down
 
 说明：
 
+- 首个注册用户会自动授予 `ADMIN`，并写入数据库角色
+- `ADMIN_USERS` 仅负责在服务启动时“提升角色”，不会自动降级已有 `ADMIN`
 - 清除孤儿文件会扫描所有已配置的存储后端，不只扫描默认存储
 - 因此同时支持：
   - 纯本地文件存储
@@ -241,8 +245,8 @@ docker compose down
   - 构建 `linux/amd64` 与 `linux/arm64`
   - 推送到 `ghcr.io/<owner>/keer`
   - 发布 tag 推送会额外生成版本镜像标签：
-    - 稳定版：`:v3.0.0`、`:3.0.0`、`:3.0`、`:3`
-    - 预发布：`:v3.0.0-beta.1`、`:3.0.0-beta.1`
+    - 稳定版：`:vX.Y.Z`、`:X.Y.Z`、`:X.Y`、`:X`
+    - 预发布：`:vX.Y.Z-beta.N`、`:X.Y.Z-beta.N`
 
 如果你准备直接启用镜像发布，需要确保仓库对 GitHub Container Registry 有 `packages: write` 权限。
 
@@ -250,9 +254,9 @@ docker compose down
 
 后端现在和 Android 使用同一套 release tag 规则：
 
-- `v3.0.0`
-- `v3.0.0-alpha.1`
-- `v3.0.0-beta.1`
+- `vX.Y.Z`
+- `vX.Y.Z-alpha.N`
+- `vX.Y.Z-beta.N`
 
 推荐发布顺序：
 
@@ -265,7 +269,7 @@ docker compose down
 - Android 会发布 APK 到 GitHub Release
 - Backend 会发布多平台二进制到 GitHub Release
 - Backend 会同步推送 Docker 镜像到 `ghcr.io/<owner>/keer`
-- 当 tag 为 `v3.0.0` 时，Docker 镜像至少会带上 `:v3.0.0` 和 `:3.0.0`
+- 当 tag 为 `vX.Y.Z` 时，Docker 镜像至少会带上 `:vX.Y.Z` 和 `:X.Y.Z`
 - Backend 不再发布 `:main` 或 `:latest`
 
 ## 鉴权与登录
@@ -365,6 +369,6 @@ go vet ./...
 - Stable tag release publishes `:vX.Y.Z`, `:X.Y.Z`, `:X.Y`, and `:X`
 - Prerelease tag release publishes `:vX.Y.Z-beta.N` or `:vX.Y.Z-alpha.N`, plus the stripped `:X.Y.Z-beta.N` / `:X.Y.Z-alpha.N`
 - Trigger mode (push tag):
-  - `v3.0.0`
-  - `v3.0.0-alpha.1`
-  - `v3.0.0-beta.1`
+  - `vX.Y.Z`
+  - `vX.Y.Z-alpha.N`
+  - `vX.Y.Z-beta.N`
