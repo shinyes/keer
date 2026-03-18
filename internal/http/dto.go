@@ -128,7 +128,8 @@ type syncPullUserPatch struct {
 }
 
 type syncPullGroupPatch struct {
-	Directory []apiGroup `json:"directory"`
+	Upserts []apiGroup `json:"upserts"`
+	Deletes []string   `json:"deletes"`
 }
 
 type syncPullGroupMessagesPatch struct {
@@ -136,11 +137,11 @@ type syncPullGroupMessagesPatch struct {
 }
 
 type syncPullGroupMessagesGroupPatch struct {
-	Group       string            `json:"group"`
-	FullReplace bool              `json:"fullReplace"`
-	HasUnread   bool              `json:"hasUnread"`
-	Messages    []apiGroupMessage `json:"messages"`
-	Tags        []string          `json:"tags"`
+	Group     string            `json:"group"`
+	HasUnread bool              `json:"hasUnread"`
+	Upserts   []apiGroupMessage `json:"upserts"`
+	Deletes   []string          `json:"deletes"`
+	Tags      []string          `json:"tags"`
 }
 
 type syncPullSettingsPatch struct {

@@ -211,15 +211,33 @@ func (d SyncDomain) IsValid() bool {
 		d == SyncDomainSettings
 }
 
+type SyncAction string
+
+const (
+	SyncActionUpsert SyncAction = "UPSERT"
+	SyncActionDelete SyncAction = "DELETE"
+)
+
+func (a SyncAction) IsValid() bool {
+	return a == SyncActionUpsert || a == SyncActionDelete
+}
+
 type SyncEvent struct {
 	ID             int64
 	Domain         SyncDomain
+	Action         SyncAction
 	ActorUserID    int64
 	TargetUserID   int64
 	GroupID        int64
 	MemoID         int64
 	GroupMessageID int64
 	EventTime      time.Time
+}
+
+type GroupMessageTombstone struct {
+	GroupID     int64
+	MessageID   int64
+	DeletedTime time.Time
 }
 
 type GroupKeyVersion struct {

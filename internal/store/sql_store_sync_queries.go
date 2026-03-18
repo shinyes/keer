@@ -26,6 +26,7 @@ func (s *SQLStore) ListSyncEvents(
 		SELECT
 			id,
 			domain,
+			action,
 			actor_user_id,
 			target_user_id,
 			group_id,
@@ -54,10 +55,12 @@ func (s *SQLStore) ListSyncEvents(
 	for rows.Next() {
 		var event models.SyncEvent
 		var domain string
+		var action string
 		var eventTimeRaw string
 		if err := rows.Scan(
 			&event.ID,
 			&domain,
+			&action,
 			&event.ActorUserID,
 			&event.TargetUserID,
 			&event.GroupID,
@@ -68,6 +71,10 @@ func (s *SQLStore) ListSyncEvents(
 			return nil, err
 		}
 		event.Domain = models.SyncDomain(strings.TrimSpace(domain))
+		event.Action = models.SyncAction(strings.ToUpper(strings.TrimSpace(action)))
+		if !event.Action.IsValid() {
+			event.Action = models.SyncActionUpsert
+		}
 		eventTime, err := parseTime(eventTimeRaw)
 		if err != nil {
 			return nil, err

@@ -312,6 +312,7 @@ Authorization: Bearer <accessToken>
 - `POST /api/v1/sync/pull`
   - 请求体：`cursor`、`domains`、`groupScopes`、`limit`
   - 响应体：`nextCursor`、`hasMore`、`patches{memos,users,groups,groupMessages,settings}`
+  - `patches.groupMessages.groups[*]` 采用增量补丁：`upserts` / `deletes` / `tags` / `hasUnread`
   - 同步域：`MEMOS` / `USERS` / `GROUPS` / `GROUP_MESSAGES` / `SETTINGS`
 
 Memo 接口：

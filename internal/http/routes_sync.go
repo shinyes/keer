@@ -2,10 +2,11 @@ package http
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/gofiber/fiber/v2"
 
@@ -70,7 +71,8 @@ func registerSyncRoutes(
 					Upserts: []apiUser{},
 				},
 				Groups: syncPullGroupPatch{
-					Directory: []apiGroup{},
+					Upserts: []apiGroup{},
+					Deletes: []string{},
 				},
 				GroupMessages: syncPullGroupMessagesPatch{
 					Groups: []syncPullGroupMessagesGroupPatch{},
@@ -97,35 +99,28 @@ func registerSyncRoutes(
 		}
 		response.HasMore = hasMore
 
-		isInitialPull := cursor == 0
-		memoChanged := isInitialPull
-		userChanged := isInitialPull
-		groupChanged := isInitialPull
-		groupMessageChanged := isInitialPull
-		settingsChanged := isInitialPull
-
-		memoSince := time.Unix(0, 0).UTC()
-		userSince := time.Unix(0, 0).UTC()
-		var memoSinceSet bool
-		var userSinceSet bool
+		memoUpsertIDs := map[int64]struct{}{}
+		memoDeleteIDs := map[int64]struct{}{}
 		userIDs := map[int64]struct{}{currentUser.ID: {}}
-		groupIDs := map[int64]struct{}{}
+		groupUpsertIDs := map[int64]struct{}{}
+		groupDeleteIDs := map[int64]struct{}{}
+		groupMessageUpsertIDsByGroup := map[int64]map[int64]struct{}{}
+		groupMessageDeleteIDsByGroup := map[int64]map[int64]struct{}{}
 		groupMemberCache := map[int64]bool{}
+		settingsChanged := cursor == 0
 
 		for _, event := range events {
 			switch event.Domain {
 			case models.SyncDomainMemos:
-				memoChanged = true
-				if !memoSinceSet || event.EventTime.Before(memoSince) {
-					memoSince = event.EventTime
-					memoSinceSet = true
+				if event.MemoID <= 0 {
+					continue
+				}
+				if event.Action == models.SyncActionDelete {
+					memoDeleteIDs[event.MemoID] = struct{}{}
+				} else {
+					memoUpsertIDs[event.MemoID] = struct{}{}
 				}
 			case models.SyncDomainUsers:
-				userChanged = true
-				if !userSinceSet || event.EventTime.Before(userSince) {
-					userSince = event.EventTime
-					userSinceSet = true
-				}
 				if event.TargetUserID > 0 {
 					userIDs[event.TargetUserID] = struct{}{}
 				}
@@ -133,6 +128,20 @@ func registerSyncRoutes(
 					userIDs[event.ActorUserID] = struct{}{}
 				}
 			case models.SyncDomainGroups:
+				if event.GroupID <= 0 {
+					continue
+				}
+				if len(groupScopeIDs) > 0 {
+					if _, exists := groupScopeIDs[event.GroupID]; !exists {
+						continue
+					}
+				}
+				if event.Action == models.SyncActionDelete {
+					if syncGroupDeleteRelevant(currentUser.ID, event) {
+						groupDeleteIDs[event.GroupID] = struct{}{}
+					}
+					continue
+				}
 				visible, err := syncGroupVisible(
 					c.Context(),
 					sqlStore,
@@ -144,14 +153,13 @@ func registerSyncRoutes(
 				if err != nil {
 					return internalError(c, err)
 				}
-				if !visible {
-					continue
-				}
-				groupChanged = true
-				if event.GroupID > 0 {
-					groupIDs[event.GroupID] = struct{}{}
+				if visible {
+					groupUpsertIDs[event.GroupID] = struct{}{}
 				}
 			case models.SyncDomainGroupMessages:
+				if event.GroupID <= 0 {
+					continue
+				}
 				visible, err := syncGroupVisible(
 					c.Context(),
 					sqlStore,
@@ -166,9 +174,13 @@ func registerSyncRoutes(
 				if !visible {
 					continue
 				}
-				groupMessageChanged = true
-				if event.GroupID > 0 {
-					groupIDs[event.GroupID] = struct{}{}
+				groupUpsertIDs[event.GroupID] = struct{}{}
+				if event.GroupID > 0 && event.GroupMessageID > 0 {
+					if event.Action == models.SyncActionDelete {
+						addGroupedMessageID(groupMessageDeleteIDsByGroup, event.GroupID, event.GroupMessageID)
+					} else {
+						addGroupedMessageID(groupMessageUpsertIDsByGroup, event.GroupID, event.GroupMessageID)
+					}
 				}
 			case models.SyncDomainSettings:
 				if event.TargetUserID == 0 || event.TargetUserID == currentUser.ID {
@@ -177,95 +189,70 @@ func registerSyncRoutes(
 			}
 		}
 
-		if _, requested := domainSet[models.SyncDomainMemos]; requested && memoChanged {
-			if !memoSinceSet {
-				memoSince = time.Unix(0, 0).UTC()
+		if _, requested := domainSet[models.SyncDomainMemos]; requested {
+			upsertIDs := sortedInt64Keys(memoUpsertIDs)
+			if len(upsertIDs) > 0 {
+				items, err := memoService.ListVisibleMemosByIDs(c.Context(), currentUser.ID, upsertIDs)
+				if err != nil {
+					return internalError(c, err)
+				}
+				visibleIDs := make(map[int64]struct{}, len(items))
+				for _, item := range items {
+					visibleIDs[item.Memo.ID] = struct{}{}
+					response.Patches.Memos.Upserts = append(response.Patches.Memos.Upserts, buildAPIMemo(item))
+				}
+				for _, memoID := range upsertIDs {
+					if _, visible := visibleIDs[memoID]; !visible {
+						memoDeleteIDs[memoID] = struct{}{}
+					}
+				}
 			}
-			changes, err := memoService.ListMemoChanges(
-				c.Context(),
-				currentUser.ID,
-				nil,
-				"",
-				memoSince,
-				time.Now().UTC(),
-			)
-			if err != nil {
-				return internalError(c, err)
+			for _, memoID := range sortedInt64Keys(memoDeleteIDs) {
+				response.Patches.Memos.Deletes = append(response.Patches.Memos.Deletes, fmt.Sprintf("memos/%d", memoID))
 			}
-			for _, item := range changes.Memos {
-				response.Patches.Memos.Upserts = append(response.Patches.Memos.Upserts, buildAPIMemo(item))
-			}
-			response.Patches.Memos.Deletes = append(response.Patches.Memos.Deletes, changes.DeletedMemoNames...)
 		}
 
-		if _, requested := domainSet[models.SyncDomainUsers]; requested && userChanged {
-			if !userSinceSet {
-				userSince = time.Unix(0, 0).UTC()
-			}
-			identifiers := make([]string, 0, len(userIDs))
-			for id := range userIDs {
-				if id <= 0 {
-					continue
+		if _, requested := domainSet[models.SyncDomainUsers]; requested {
+			for _, userID := range sortedInt64Keys(userIDs) {
+				user, err := userService.GetUser(c.Context(), userID)
+				if err != nil {
+					if errors.Is(err, sql.ErrNoRows) {
+						continue
+					}
+					return internalError(c, err)
 				}
-				identifiers = append(identifiers, models.Int64ToString(id))
-			}
-			sort.Strings(identifiers)
-			if len(identifiers) > 200 {
-				identifiers = identifiers[:200]
-			}
-			changes, err := userService.ListUserChanges(
-				c.Context(),
-				identifiers,
-				userSince,
-				time.Now().UTC(),
-			)
-			if err != nil {
-				return internalError(c, err)
-			}
-			for _, user := range changes.Users {
 				response.Patches.Users.Upserts = append(response.Patches.Users.Upserts, toAPIUserSync(user))
 			}
 		}
 
-		groupByID := make(map[int64]service.GroupWithMembers)
-		if _, requested := domainSet[models.SyncDomainGroups]; requested && groupChanged {
+		groupByID := map[int64]service.GroupWithMembers{}
+		needGroupMeta := len(groupUpsertIDs) > 0 || len(groupMessageUpsertIDsByGroup) > 0 || len(groupMessageDeleteIDsByGroup) > 0
+		if needGroupMeta {
 			groups, err := groupService.ListGroups(c.Context(), currentUser.ID)
 			if err != nil {
 				return internalError(c, err)
 			}
 			for _, group := range groups {
 				groupByID[group.Group.ID] = group
-				response.Patches.Groups.Directory = append(response.Patches.Groups.Directory, toAPIGroup(group))
 			}
 		}
 
-		if _, requested := domainSet[models.SyncDomainGroupMessages]; requested && groupMessageChanged {
-			if len(groupByID) == 0 {
-				groups, err := groupService.ListGroups(c.Context(), currentUser.ID)
-				if err != nil {
-					return internalError(c, err)
+		if _, requested := domainSet[models.SyncDomainGroups]; requested {
+			for _, groupID := range sortedInt64Keys(groupUpsertIDs) {
+				group, exists := groupByID[groupID]
+				if !exists {
+					groupDeleteIDs[groupID] = struct{}{}
+					continue
 				}
-				for _, group := range groups {
-					groupByID[group.Group.ID] = group
-				}
+				response.Patches.Groups.Upserts = append(response.Patches.Groups.Upserts, toAPIGroup(group))
 			}
-
-			groupsToPull := make([]int64, 0, len(groupIDs))
-			if len(groupScopeIDs) > 0 {
-				for groupID := range groupScopeIDs {
-					groupsToPull = append(groupsToPull, groupID)
-				}
-			} else if isInitialPull {
-				for groupID := range groupByID {
-					groupsToPull = append(groupsToPull, groupID)
-				}
-			} else {
-				for groupID := range groupIDs {
-					groupsToPull = append(groupsToPull, groupID)
-				}
+			for _, groupID := range sortedInt64Keys(groupDeleteIDs) {
+				response.Patches.Groups.Deletes = append(response.Patches.Groups.Deletes, fmt.Sprintf("groups/%d", groupID))
 			}
-			sort.Slice(groupsToPull, func(i, j int) bool { return groupsToPull[i] < groupsToPull[j] })
+		}
 
+		if _, requested := domainSet[models.SyncDomainGroupMessages]; requested {
+			groupsToPull := groupedMessageGroupIDs(groupMessageUpsertIDsByGroup, groupMessageDeleteIDsByGroup)
 			for _, groupID := range groupsToPull {
 				if groupID <= 0 {
 					continue
@@ -275,41 +262,54 @@ func registerSyncRoutes(
 					continue
 				}
 
-				messages := make([]apiGroupMessage, 0, 64)
-				pageToken := ""
-				for {
-					items, nextToken, err := groupService.ListGroupMessages(
+				upserts := make([]apiGroupMessage, 0, 16)
+				upsertIDs := groupedMessageIDs(groupMessageUpsertIDsByGroup, groupID)
+				if len(upsertIDs) > 0 {
+					items, err := groupService.ListGroupMessagesByIDs(
 						c.Context(),
 						currentUser.ID,
 						groupID,
-						200,
-						pageToken,
+						upsertIDs,
 					)
 					if err != nil {
 						return internalError(c, err)
 					}
 					for _, item := range items {
-						messages = append(messages, toAPIGroupMessage(item))
+						upserts = append(upserts, toAPIGroupMessage(item))
 					}
-					if strings.TrimSpace(nextToken) == "" {
-						break
-					}
-					pageToken = nextToken
 				}
+
+				deleteIDSet := map[int64]struct{}{}
+				for _, messageID := range groupedMessageIDs(groupMessageDeleteIDsByGroup, groupID) {
+					if messageID > 0 {
+						deleteIDSet[messageID] = struct{}{}
+					}
+				}
+				deletes := make([]string, 0, len(deleteIDSet))
+				for messageID := range deleteIDSet {
+					deletes = append(
+						deletes,
+						fmt.Sprintf("groups/%d/messages/%d", groupID, messageID),
+					)
+				}
+				sort.Strings(deletes)
 
 				tags, err := groupService.ListGroupTags(c.Context(), currentUser.ID, groupID)
 				if err != nil {
-					return internalError(c, err)
+					if !errors.Is(err, sql.ErrNoRows) {
+						return internalError(c, err)
+					}
+					tags = []string{}
 				}
 
 				response.Patches.GroupMessages.Groups = append(
 					response.Patches.GroupMessages.Groups,
 					syncPullGroupMessagesGroupPatch{
-						Group:       groupMeta.Group.Name(),
-						FullReplace: true,
-						HasUnread:   groupMeta.Group.HasUnread,
-						Messages:    messages,
-						Tags:        tags,
+						Group:     groupMeta.Group.Name(),
+						HasUnread: groupMeta.Group.HasUnread,
+						Upserts:   upserts,
+						Deletes:   deletes,
+						Tags:      tags,
 					},
 				)
 			}
@@ -411,4 +411,76 @@ func syncGroupVisible(
 	}
 	cache[groupID] = member
 	return member, nil
+}
+
+func syncGroupDeleteRelevant(currentUserID int64, event models.SyncEvent) bool {
+	if event.GroupID <= 0 {
+		return false
+	}
+	if event.TargetUserID == currentUserID {
+		return true
+	}
+	if event.ActorUserID == currentUserID {
+		return true
+	}
+	return event.TargetUserID == 0
+}
+
+func sortedInt64Keys(set map[int64]struct{}) []int64 {
+	if len(set) == 0 {
+		return []int64{}
+	}
+	result := make([]int64, 0, len(set))
+	for key := range set {
+		if key > 0 {
+			result = append(result, key)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
+	return result
+}
+
+func addGroupedMessageID(target map[int64]map[int64]struct{}, groupID int64, messageID int64) {
+	if groupID <= 0 || messageID <= 0 {
+		return
+	}
+	groupSet, exists := target[groupID]
+	if !exists {
+		groupSet = map[int64]struct{}{}
+		target[groupID] = groupSet
+	}
+	groupSet[messageID] = struct{}{}
+}
+
+func groupedMessageIDs(source map[int64]map[int64]struct{}, groupID int64) []int64 {
+	groupSet, exists := source[groupID]
+	if !exists || len(groupSet) == 0 {
+		return []int64{}
+	}
+	ids := make([]int64, 0, len(groupSet))
+	for messageID := range groupSet {
+		if messageID > 0 {
+			ids = append(ids, messageID)
+		}
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	return ids
+}
+
+func groupedMessageGroupIDs(
+	upserts map[int64]map[int64]struct{},
+	deletes map[int64]map[int64]struct{},
+) []int64 {
+	merged := map[int64]struct{}{}
+	for groupID := range upserts {
+		if groupID > 0 {
+			merged[groupID] = struct{}{}
+		}
+	}
+	for groupID := range deletes {
+		if groupID > 0 {
+			merged[groupID] = struct{}{}
+		}
+	}
+	return sortedInt64Keys(merged)
 }

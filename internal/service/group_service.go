@@ -286,6 +286,54 @@ func (s *GroupService) ListGroupMessages(
 	return result, nextToken, nil
 }
 
+func (s *GroupService) ListGroupMessagesByIDs(
+	ctx context.Context,
+	userID int64,
+	groupID int64,
+	messageIDs []int64,
+) ([]GroupMessageWithCreator, error) {
+	if err := s.ensureGroupMember(ctx, groupID, userID); err != nil {
+		return nil, err
+	}
+
+	msgs, err := s.store.ListGroupMessagesByIDs(ctx, groupID, messageIDs)
+	if err != nil {
+		return nil, err
+	}
+	if len(msgs) == 0 {
+		return []GroupMessageWithCreator{}, nil
+	}
+
+	creatorMap := make(map[int64]models.User)
+	result := make([]GroupMessageWithCreator, 0, len(msgs))
+	messageIDsForAttachments := make([]int64, 0, len(msgs))
+	for _, msg := range msgs {
+		messageIDsForAttachments = append(messageIDsForAttachments, msg.ID)
+		creator, ok := creatorMap[msg.CreatorID]
+		if !ok {
+			user, err := s.store.GetUserByID(ctx, msg.CreatorID)
+			if err != nil {
+				return nil, err
+			}
+			creator = user
+			creatorMap[msg.CreatorID] = user
+		}
+		result = append(result, GroupMessageWithCreator{
+			Message: msg,
+			Creator: creator,
+		})
+	}
+
+	attachmentsByMessageID, err := s.store.ListAttachmentsByGroupMessageIDs(ctx, messageIDsForAttachments)
+	if err != nil {
+		return nil, err
+	}
+	for i := range result {
+		result[i].Attachments = attachmentsByMessageID[result[i].Message.ID]
+	}
+	return result, nil
+}
+
 func (s *GroupService) MarkGroupRead(
 	ctx context.Context,
 	userID int64,

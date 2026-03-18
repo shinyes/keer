@@ -143,6 +143,7 @@ func Migrate(db *sql.DB) error {
 		`CREATE TABLE IF NOT EXISTS sync_events (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			domain TEXT NOT NULL,
+			action TEXT NOT NULL DEFAULT 'UPSERT',
 			actor_user_id INTEGER NOT NULL DEFAULT 0,
 			target_user_id INTEGER NOT NULL DEFAULT 0,
 			group_id INTEGER NOT NULL DEFAULT 0,
@@ -157,63 +158,63 @@ func Migrate(db *sql.DB) error {
 		AFTER INSERT ON memos
 		BEGIN
 			INSERT INTO sync_events(
-				domain, actor_user_id, target_user_id, memo_id, event_time
+				domain, action, actor_user_id, target_user_id, memo_id, event_time
 			) VALUES (
-				'MEMOS', NEW.creator_id, NEW.creator_id, NEW.id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+				'MEMOS', 'UPSERT', NEW.creator_id, NEW.creator_id, NEW.id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 			);
 		END;`,
 		`CREATE TRIGGER IF NOT EXISTS trg_sync_events_memo_update
 		AFTER UPDATE ON memos
 		BEGIN
 			INSERT INTO sync_events(
-				domain, actor_user_id, target_user_id, memo_id, event_time
+				domain, action, actor_user_id, target_user_id, memo_id, event_time
 			) VALUES (
-				'MEMOS', NEW.creator_id, NEW.creator_id, NEW.id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+				'MEMOS', 'UPSERT', NEW.creator_id, NEW.creator_id, NEW.id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 			);
 		END;`,
 		`CREATE TRIGGER IF NOT EXISTS trg_sync_events_memo_tombstone_insert
 		AFTER INSERT ON memo_tombstones
 		BEGIN
 			INSERT INTO sync_events(
-				domain, actor_user_id, target_user_id, memo_id, event_time
+				domain, action, actor_user_id, target_user_id, memo_id, event_time
 			) VALUES (
-				'MEMOS', NEW.creator_id, NEW.creator_id, NEW.memo_id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+				'MEMOS', 'DELETE', NEW.creator_id, NEW.creator_id, NEW.memo_id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 			);
 		END;`,
 		`CREATE TRIGGER IF NOT EXISTS trg_sync_events_user_insert
 		AFTER INSERT ON users
 		BEGIN
 			INSERT INTO sync_events(
-				domain, actor_user_id, target_user_id, event_time
+				domain, action, actor_user_id, target_user_id, event_time
 			) VALUES (
-				'USERS', NEW.id, NEW.id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+				'USERS', 'UPSERT', NEW.id, NEW.id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 			);
 		END;`,
 		`CREATE TRIGGER IF NOT EXISTS trg_sync_events_user_update
 		AFTER UPDATE ON users
 		BEGIN
 			INSERT INTO sync_events(
-				domain, actor_user_id, target_user_id, event_time
+				domain, action, actor_user_id, target_user_id, event_time
 			) VALUES (
-				'USERS', NEW.id, NEW.id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+				'USERS', 'UPSERT', NEW.id, NEW.id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 			);
 		END;`,
 		`CREATE TRIGGER IF NOT EXISTS trg_sync_events_settings_insert
 		AFTER INSERT ON user_general_settings
 		BEGIN
 			INSERT INTO sync_events(
-				domain, actor_user_id, target_user_id, event_time
+				domain, action, actor_user_id, target_user_id, event_time
 			) VALUES (
-				'SETTINGS', NEW.user_id, NEW.user_id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+				'SETTINGS', 'UPSERT', NEW.user_id, NEW.user_id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 			);
 		END;`,
 		`CREATE TRIGGER IF NOT EXISTS trg_sync_events_settings_update
 		AFTER UPDATE ON user_general_settings
 		BEGIN
 			INSERT INTO sync_events(
-				domain, actor_user_id, target_user_id, event_time
+				domain, action, actor_user_id, target_user_id, event_time
 			) VALUES (
-				'SETTINGS', NEW.user_id, NEW.user_id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+				'SETTINGS', 'UPSERT', NEW.user_id, NEW.user_id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 			);
 		END;`,
 		`CREATE TABLE IF NOT EXISTS groups (
@@ -234,27 +235,27 @@ func Migrate(db *sql.DB) error {
 		AFTER INSERT ON groups
 		BEGIN
 			INSERT INTO sync_events(
-				domain, actor_user_id, target_user_id, group_id, event_time
+				domain, action, actor_user_id, target_user_id, group_id, event_time
 			) VALUES (
-				'GROUPS', NEW.creator_id, NEW.creator_id, NEW.id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+				'GROUPS', 'UPSERT', NEW.creator_id, NEW.creator_id, NEW.id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 			);
 		END;`,
 		`CREATE TRIGGER IF NOT EXISTS trg_sync_events_group_update
 		AFTER UPDATE ON groups
 		BEGIN
 			INSERT INTO sync_events(
-				domain, actor_user_id, target_user_id, group_id, event_time
+				domain, action, actor_user_id, target_user_id, group_id, event_time
 			) VALUES (
-				'GROUPS', NEW.creator_id, NEW.creator_id, NEW.id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+				'GROUPS', 'UPSERT', NEW.creator_id, NEW.creator_id, NEW.id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 			);
 		END;`,
 		`CREATE TRIGGER IF NOT EXISTS trg_sync_events_group_delete
 		AFTER DELETE ON groups
 		BEGIN
 			INSERT INTO sync_events(
-				domain, actor_user_id, target_user_id, group_id, event_time
+				domain, action, actor_user_id, target_user_id, group_id, event_time
 			) VALUES (
-				'GROUPS', OLD.creator_id, OLD.creator_id, OLD.id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+				'GROUPS', 'DELETE', OLD.creator_id, OLD.creator_id, OLD.id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 			);
 		END;`,
 		`CREATE TABLE IF NOT EXISTS group_members (
@@ -271,18 +272,18 @@ func Migrate(db *sql.DB) error {
 		AFTER INSERT ON group_members
 		BEGIN
 			INSERT INTO sync_events(
-				domain, actor_user_id, target_user_id, group_id, event_time
+				domain, action, actor_user_id, target_user_id, group_id, event_time
 			) VALUES (
-				'GROUPS', NEW.user_id, NEW.user_id, NEW.group_id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+				'GROUPS', 'UPSERT', NEW.user_id, NEW.user_id, NEW.group_id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 			);
 		END;`,
 		`CREATE TRIGGER IF NOT EXISTS trg_sync_events_group_member_delete
 		AFTER DELETE ON group_members
 		BEGIN
 			INSERT INTO sync_events(
-				domain, actor_user_id, target_user_id, group_id, event_time
+				domain, action, actor_user_id, target_user_id, group_id, event_time
 			) VALUES (
-				'GROUPS', OLD.user_id, OLD.user_id, OLD.group_id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+				'GROUPS', 'DELETE', OLD.user_id, OLD.user_id, OLD.group_id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 			);
 		END;`,
 		`CREATE TRIGGER IF NOT EXISTS trg_sync_events_group_member_read_update
@@ -290,9 +291,9 @@ func Migrate(db *sql.DB) error {
 		WHEN NEW.last_read_message_id <> OLD.last_read_message_id
 		BEGIN
 			INSERT INTO sync_events(
-				domain, actor_user_id, target_user_id, group_id, group_message_id, event_time
+				domain, action, actor_user_id, target_user_id, group_id, group_message_id, event_time
 			) VALUES (
-				'GROUP_MESSAGES', NEW.user_id, NEW.user_id, NEW.group_id, NEW.last_read_message_id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+				'GROUP_MESSAGES', 'UPSERT', NEW.user_id, NEW.user_id, NEW.group_id, NEW.last_read_message_id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 			);
 		END;`,
 		`CREATE TABLE IF NOT EXISTS group_tags (
@@ -318,31 +319,45 @@ func Migrate(db *sql.DB) error {
 			FOREIGN KEY(creator_id) REFERENCES users(id) ON DELETE CASCADE
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_group_messages_group_time ON group_messages(group_id, create_time ASC, id ASC);`,
+		`CREATE TABLE IF NOT EXISTS group_message_tombstones (
+			group_id INTEGER NOT NULL,
+			message_id INTEGER NOT NULL,
+			deleted_time TEXT NOT NULL,
+			PRIMARY KEY(group_id, message_id),
+			FOREIGN KEY(group_id) REFERENCES groups(id) ON DELETE CASCADE
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_group_message_tombstones_group_deleted_time ON group_message_tombstones(group_id, deleted_time DESC, message_id DESC);`,
+		`CREATE INDEX IF NOT EXISTS idx_group_message_tombstones_deleted_time ON group_message_tombstones(deleted_time DESC, message_id DESC);`,
 		`CREATE TRIGGER IF NOT EXISTS trg_sync_events_group_message_insert
 		AFTER INSERT ON group_messages
 		BEGIN
 			INSERT INTO sync_events(
-				domain, actor_user_id, target_user_id, group_id, group_message_id, event_time
+				domain, action, actor_user_id, target_user_id, group_id, group_message_id, event_time
 			) VALUES (
-				'GROUP_MESSAGES', NEW.creator_id, NEW.creator_id, NEW.group_id, NEW.id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+				'GROUP_MESSAGES', 'UPSERT', NEW.creator_id, NEW.creator_id, NEW.group_id, NEW.id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 			);
 		END;`,
 		`CREATE TRIGGER IF NOT EXISTS trg_sync_events_group_message_update
 		AFTER UPDATE ON group_messages
 		BEGIN
 			INSERT INTO sync_events(
-				domain, actor_user_id, target_user_id, group_id, group_message_id, event_time
+				domain, action, actor_user_id, target_user_id, group_id, group_message_id, event_time
 			) VALUES (
-				'GROUP_MESSAGES', NEW.creator_id, NEW.creator_id, NEW.group_id, NEW.id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+				'GROUP_MESSAGES', 'UPSERT', NEW.creator_id, NEW.creator_id, NEW.group_id, NEW.id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 			);
 		END;`,
 		`CREATE TRIGGER IF NOT EXISTS trg_sync_events_group_message_delete
 		AFTER DELETE ON group_messages
 		BEGIN
-			INSERT INTO sync_events(
-				domain, actor_user_id, target_user_id, group_id, group_message_id, event_time
+			INSERT OR REPLACE INTO group_message_tombstones(
+				group_id, message_id, deleted_time
 			) VALUES (
-				'GROUP_MESSAGES', OLD.creator_id, OLD.creator_id, OLD.group_id, OLD.id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+				OLD.group_id, OLD.id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+			);
+			INSERT INTO sync_events(
+				domain, action, actor_user_id, target_user_id, group_id, group_message_id, event_time
+			) VALUES (
+				'GROUP_MESSAGES', 'DELETE', OLD.creator_id, OLD.creator_id, OLD.group_id, OLD.id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 			);
 		END;`,
 		`CREATE TABLE IF NOT EXISTS group_message_attachments (
@@ -655,6 +670,14 @@ func Migrate(db *sql.DB) error {
 	}
 	if err := ensureColumn(
 		db,
+		"sync_events",
+		"action",
+		"TEXT NOT NULL DEFAULT 'UPSERT'",
+	); err != nil {
+		return fmt.Errorf("migration failed: %w", err)
+	}
+	if err := ensureColumn(
+		db,
 		"memos",
 		"latitude",
 		"REAL",
@@ -707,6 +730,9 @@ func Migrate(db *sql.DB) error {
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_memos_has_incomplete_tasks ON memos(has_incomplete_tasks)`); err != nil {
 		return fmt.Errorf("migration failed: %w", err)
 	}
+	if err := recreateSyncEventTriggers(db); err != nil {
+		return fmt.Errorf("migration failed: %w", err)
+	}
 	return nil
 }
 
@@ -747,4 +773,189 @@ func hasColumn(db *sql.DB, table string, column string) (bool, error) {
 		return false, err
 	}
 	return false, nil
+}
+
+func recreateSyncEventTriggers(db *sql.DB) error {
+	dropStmts := []string{
+		`DROP TRIGGER IF EXISTS trg_sync_events_memo_insert;`,
+		`DROP TRIGGER IF EXISTS trg_sync_events_memo_update;`,
+		`DROP TRIGGER IF EXISTS trg_sync_events_memo_tombstone_insert;`,
+		`DROP TRIGGER IF EXISTS trg_sync_events_user_insert;`,
+		`DROP TRIGGER IF EXISTS trg_sync_events_user_update;`,
+		`DROP TRIGGER IF EXISTS trg_sync_events_settings_insert;`,
+		`DROP TRIGGER IF EXISTS trg_sync_events_settings_update;`,
+		`DROP TRIGGER IF EXISTS trg_sync_events_group_insert;`,
+		`DROP TRIGGER IF EXISTS trg_sync_events_group_update;`,
+		`DROP TRIGGER IF EXISTS trg_sync_events_group_delete;`,
+		`DROP TRIGGER IF EXISTS trg_sync_events_group_member_insert;`,
+		`DROP TRIGGER IF EXISTS trg_sync_events_group_member_delete;`,
+		`DROP TRIGGER IF EXISTS trg_sync_events_group_member_read_update;`,
+		`DROP TRIGGER IF EXISTS trg_sync_events_group_message_insert;`,
+		`DROP TRIGGER IF EXISTS trg_sync_events_group_message_update;`,
+		`DROP TRIGGER IF EXISTS trg_sync_events_group_message_delete;`,
+	}
+	for _, stmt := range dropStmts {
+		if _, err := db.Exec(stmt); err != nil {
+			return err
+		}
+	}
+
+	createStmts := []string{
+		`CREATE TRIGGER IF NOT EXISTS trg_sync_events_memo_insert
+		AFTER INSERT ON memos
+		BEGIN
+			INSERT INTO sync_events(
+				domain, action, actor_user_id, target_user_id, memo_id, event_time
+			) VALUES (
+				'MEMOS', 'UPSERT', NEW.creator_id, NEW.creator_id, NEW.id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+			);
+		END;`,
+		`CREATE TRIGGER IF NOT EXISTS trg_sync_events_memo_update
+		AFTER UPDATE ON memos
+		BEGIN
+			INSERT INTO sync_events(
+				domain, action, actor_user_id, target_user_id, memo_id, event_time
+			) VALUES (
+				'MEMOS', 'UPSERT', NEW.creator_id, NEW.creator_id, NEW.id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+			);
+		END;`,
+		`CREATE TRIGGER IF NOT EXISTS trg_sync_events_memo_tombstone_insert
+		AFTER INSERT ON memo_tombstones
+		BEGIN
+			INSERT INTO sync_events(
+				domain, action, actor_user_id, target_user_id, memo_id, event_time
+			) VALUES (
+				'MEMOS', 'DELETE', NEW.creator_id, NEW.creator_id, NEW.memo_id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+			);
+		END;`,
+		`CREATE TRIGGER IF NOT EXISTS trg_sync_events_user_insert
+		AFTER INSERT ON users
+		BEGIN
+			INSERT INTO sync_events(
+				domain, action, actor_user_id, target_user_id, event_time
+			) VALUES (
+				'USERS', 'UPSERT', NEW.id, NEW.id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+			);
+		END;`,
+		`CREATE TRIGGER IF NOT EXISTS trg_sync_events_user_update
+		AFTER UPDATE ON users
+		BEGIN
+			INSERT INTO sync_events(
+				domain, action, actor_user_id, target_user_id, event_time
+			) VALUES (
+				'USERS', 'UPSERT', NEW.id, NEW.id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+			);
+		END;`,
+		`CREATE TRIGGER IF NOT EXISTS trg_sync_events_settings_insert
+		AFTER INSERT ON user_general_settings
+		BEGIN
+			INSERT INTO sync_events(
+				domain, action, actor_user_id, target_user_id, event_time
+			) VALUES (
+				'SETTINGS', 'UPSERT', NEW.user_id, NEW.user_id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+			);
+		END;`,
+		`CREATE TRIGGER IF NOT EXISTS trg_sync_events_settings_update
+		AFTER UPDATE ON user_general_settings
+		BEGIN
+			INSERT INTO sync_events(
+				domain, action, actor_user_id, target_user_id, event_time
+			) VALUES (
+				'SETTINGS', 'UPSERT', NEW.user_id, NEW.user_id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+			);
+		END;`,
+		`CREATE TRIGGER IF NOT EXISTS trg_sync_events_group_insert
+		AFTER INSERT ON groups
+		BEGIN
+			INSERT INTO sync_events(
+				domain, action, actor_user_id, target_user_id, group_id, event_time
+			) VALUES (
+				'GROUPS', 'UPSERT', NEW.creator_id, NEW.creator_id, NEW.id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+			);
+		END;`,
+		`CREATE TRIGGER IF NOT EXISTS trg_sync_events_group_update
+		AFTER UPDATE ON groups
+		BEGIN
+			INSERT INTO sync_events(
+				domain, action, actor_user_id, target_user_id, group_id, event_time
+			) VALUES (
+				'GROUPS', 'UPSERT', NEW.creator_id, NEW.creator_id, NEW.id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+			);
+		END;`,
+		`CREATE TRIGGER IF NOT EXISTS trg_sync_events_group_delete
+		AFTER DELETE ON groups
+		BEGIN
+			INSERT INTO sync_events(
+				domain, action, actor_user_id, target_user_id, group_id, event_time
+			) VALUES (
+				'GROUPS', 'DELETE', OLD.creator_id, OLD.creator_id, OLD.id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+			);
+		END;`,
+		`CREATE TRIGGER IF NOT EXISTS trg_sync_events_group_member_insert
+		AFTER INSERT ON group_members
+		BEGIN
+			INSERT INTO sync_events(
+				domain, action, actor_user_id, target_user_id, group_id, event_time
+			) VALUES (
+				'GROUPS', 'UPSERT', NEW.user_id, NEW.user_id, NEW.group_id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+			);
+		END;`,
+		`CREATE TRIGGER IF NOT EXISTS trg_sync_events_group_member_delete
+		AFTER DELETE ON group_members
+		BEGIN
+			INSERT INTO sync_events(
+				domain, action, actor_user_id, target_user_id, group_id, event_time
+			) VALUES (
+				'GROUPS', 'DELETE', OLD.user_id, OLD.user_id, OLD.group_id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+			);
+		END;`,
+		`CREATE TRIGGER IF NOT EXISTS trg_sync_events_group_member_read_update
+		AFTER UPDATE OF last_read_message_id ON group_members
+		WHEN NEW.last_read_message_id <> OLD.last_read_message_id
+		BEGIN
+			INSERT INTO sync_events(
+				domain, action, actor_user_id, target_user_id, group_id, group_message_id, event_time
+			) VALUES (
+				'GROUP_MESSAGES', 'UPSERT', NEW.user_id, NEW.user_id, NEW.group_id, NEW.last_read_message_id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+			);
+		END;`,
+		`CREATE TRIGGER IF NOT EXISTS trg_sync_events_group_message_insert
+		AFTER INSERT ON group_messages
+		BEGIN
+			INSERT INTO sync_events(
+				domain, action, actor_user_id, target_user_id, group_id, group_message_id, event_time
+			) VALUES (
+				'GROUP_MESSAGES', 'UPSERT', NEW.creator_id, NEW.creator_id, NEW.group_id, NEW.id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+			);
+		END;`,
+		`CREATE TRIGGER IF NOT EXISTS trg_sync_events_group_message_update
+		AFTER UPDATE ON group_messages
+		BEGIN
+			INSERT INTO sync_events(
+				domain, action, actor_user_id, target_user_id, group_id, group_message_id, event_time
+			) VALUES (
+				'GROUP_MESSAGES', 'UPSERT', NEW.creator_id, NEW.creator_id, NEW.group_id, NEW.id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+			);
+		END;`,
+		`CREATE TRIGGER IF NOT EXISTS trg_sync_events_group_message_delete
+		AFTER DELETE ON group_messages
+		BEGIN
+			INSERT OR REPLACE INTO group_message_tombstones(
+				group_id, message_id, deleted_time
+			) VALUES (
+				OLD.group_id, OLD.id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+			);
+			INSERT INTO sync_events(
+				domain, action, actor_user_id, target_user_id, group_id, group_message_id, event_time
+			) VALUES (
+				'GROUP_MESSAGES', 'DELETE', OLD.creator_id, OLD.creator_id, OLD.group_id, OLD.id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+			);
+		END;`,
+	}
+	for _, stmt := range createStmts {
+		if _, err := db.Exec(stmt); err != nil {
+			return err
+		}
+	}
+	return nil
 }

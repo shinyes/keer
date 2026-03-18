@@ -691,6 +691,139 @@ func (s *SQLStore) GetGroupMessageByID(ctx context.Context, messageID int64) (mo
 	return msg, nil
 }
 
+func (s *SQLStore) ListGroupMessagesByIDs(
+	ctx context.Context,
+	groupID int64,
+	messageIDs []int64,
+) ([]models.GroupMessage, error) {
+	if groupID <= 0 || len(messageIDs) == 0 {
+		return []models.GroupMessage{}, nil
+	}
+
+	normalizedIDs := make([]int64, 0, len(messageIDs))
+	seen := make(map[int64]struct{}, len(messageIDs))
+	for _, messageID := range messageIDs {
+		if messageID <= 0 {
+			continue
+		}
+		if _, exists := seen[messageID]; exists {
+			continue
+		}
+		seen[messageID] = struct{}{}
+		normalizedIDs = append(normalizedIDs, messageID)
+	}
+	if len(normalizedIDs) == 0 {
+		return []models.GroupMessage{}, nil
+	}
+
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(normalizedIDs)), ",")
+	args := make([]any, 0, len(normalizedIDs)+1)
+	args = append(args, groupID)
+	for _, messageID := range normalizedIDs {
+		args = append(args, messageID)
+	}
+
+	rows, err := s.db.QueryContext(
+		ctx,
+		fmt.Sprintf(
+			`SELECT id, group_id, creator_id, content, payload_envelope, create_time, update_time
+			FROM group_messages
+			WHERE group_id = ? AND id IN (%s)
+			ORDER BY create_time ASC, id ASC`,
+			placeholders,
+		),
+		args...,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make([]models.GroupMessage, 0, len(normalizedIDs))
+	for rows.Next() {
+		var msg models.GroupMessage
+		var createTime string
+		var updateTime string
+		if err := rows.Scan(
+			&msg.ID,
+			&msg.GroupID,
+			&msg.CreatorID,
+			&msg.Content,
+			&msg.PayloadEnvelope,
+			&createTime,
+			&updateTime,
+		); err != nil {
+			return nil, err
+		}
+		msg.CreateTime, err = parseTime(createTime)
+		if err != nil {
+			return nil, err
+		}
+		msg.UpdateTime, err = parseTime(updateTime)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, msg)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := s.hydrateGroupMessageTags(ctx, result); err != nil {
+		return nil, err
+	}
+	for i := range result {
+		result[i].Tags = normalizeGroupTags(result[i].Tags)
+	}
+	return result, nil
+}
+
+func (s *SQLStore) ListGroupMessageTombstonesSince(
+	ctx context.Context,
+	groupID int64,
+	since time.Time,
+) ([]models.GroupMessageTombstone, error) {
+	if groupID <= 0 {
+		return []models.GroupMessageTombstone{}, nil
+	}
+
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT group_id, message_id, deleted_time
+		FROM group_message_tombstones
+		WHERE group_id = ? AND deleted_time >= ?
+		ORDER BY deleted_time ASC, message_id ASC`,
+		groupID,
+		since.UTC().Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make([]models.GroupMessageTombstone, 0, 16)
+	for rows.Next() {
+		var tombstone models.GroupMessageTombstone
+		var deletedTimeRaw string
+		if err := rows.Scan(
+			&tombstone.GroupID,
+			&tombstone.MessageID,
+			&deletedTimeRaw,
+		); err != nil {
+			return nil, err
+		}
+		deletedTime, err := parseTime(deletedTimeRaw)
+		if err != nil {
+			return nil, err
+		}
+		tombstone.DeletedTime = deletedTime
+		result = append(result, tombstone)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 func (s *SQLStore) ListGroupMessagesPage(
 	ctx context.Context,
 	groupID int64,
