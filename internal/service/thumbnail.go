@@ -7,7 +7,6 @@ import (
 	"image/jpeg"
 	"io"
 	"math"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -144,18 +143,19 @@ func (s *AttachmentService) ensureThumbnailFromFile(
 	if !shouldGenerateThumbnail(contentType, filename) {
 		return
 	}
-	stat, err := os.Stat(path)
+	f, tempRoot, err := s.openTempFileForRead(path)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	defer tempRoot.Close()
+	stat, err := f.Stat()
 	if err != nil {
 		return
 	}
 	if stat.Size() <= 0 || stat.Size() > thumbnailMaxSourceSize {
 		return
 	}
-	f, err := os.Open(path)
-	if err != nil {
-		return
-	}
-	defer f.Close()
 
 	thumbnailData, err := buildThumbnailJPEG(f)
 	if err != nil || len(thumbnailData) == 0 {
@@ -195,7 +195,13 @@ func (s *AttachmentService) ensureThumbnailFromUploadSession(
 	if trimmedPath == "" {
 		return
 	}
-	stat, err := os.Stat(trimmedPath)
+	f, tempRoot, err := s.openTempFileForRead(trimmedPath)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	defer tempRoot.Close()
+	stat, err := f.Stat()
 	if err != nil {
 		return
 	}
@@ -210,11 +216,6 @@ func (s *AttachmentService) ensureThumbnailFromUploadSession(
 	if thumbnailFilename == "" {
 		thumbnailFilename = buildThumbnailFilename(attachment.Filename)
 	}
-	f, err := os.Open(trimmedPath)
-	if err != nil {
-		return
-	}
-	defer f.Close()
 
 	thumbnailKey := thumbnailStorageKey(attachment.StorageKey)
 	if thumbnailKey == "" {

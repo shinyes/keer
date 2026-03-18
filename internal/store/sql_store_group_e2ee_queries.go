@@ -212,14 +212,15 @@ func (s *SQLStore) ListAttachmentsByGroupMessageIDs(ctx context.Context, message
 		args = append(args, messageID)
 	}
 
-	query := fmt.Sprintf(
-		`SELECT gma.message_id, a.id, a.creator_id, a.filename, a.external_link, a.type, a.size, a.encryption_metadata, gma.association_encryption_metadata, a.storage_type, a.storage_key, a.thumbnail_filename, a.thumbnail_type, a.thumbnail_size, a.thumbnail_storage_type, a.thumbnail_storage_key, a.create_time
+	var queryBuilder strings.Builder
+	queryBuilder.WriteString(`SELECT gma.message_id, a.id, a.creator_id, a.filename, a.external_link, a.type, a.size, a.encryption_metadata, gma.association_encryption_metadata, a.storage_type, a.storage_key, a.thumbnail_filename, a.thumbnail_type, a.thumbnail_size, a.thumbnail_storage_type, a.thumbnail_storage_key, a.create_time
 		FROM group_message_attachments gma
 		JOIN attachments a ON a.id = gma.attachment_id
-		WHERE gma.message_id IN (%s)
-		ORDER BY gma.message_id, gma.position ASC, gma.attachment_id ASC`,
-		strings.Join(placeholders, ","),
-	)
+		WHERE gma.message_id IN (`)
+	queryBuilder.WriteString(strings.Join(placeholders, ","))
+	queryBuilder.WriteString(`)
+		ORDER BY gma.message_id, gma.position ASC, gma.attachment_id ASC`)
+	query := queryBuilder.String()
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err

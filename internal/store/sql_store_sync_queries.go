@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"strings"
 
 	"github.com/shinyes/keer/internal/models"
@@ -22,7 +21,8 @@ func (s *SQLStore) ListSyncEvents(
 		limit = 2000
 	}
 
-	query := `
+	var queryBuilder strings.Builder
+	queryBuilder.WriteString(`
 		SELECT
 			id,
 			domain,
@@ -35,14 +35,16 @@ func (s *SQLStore) ListSyncEvents(
 			event_time
 		FROM sync_events
 		WHERE id > ?
-	`
+	`)
 	args := []any{afterID}
 	domainFilter, domainArgs := buildSyncDomainFilter(domains)
 	if domainFilter != "" {
-		query += " AND " + domainFilter
+		queryBuilder.WriteString(" AND ")
+		queryBuilder.WriteString(domainFilter)
 		args = append(args, domainArgs...)
 	}
-	query += " ORDER BY id ASC LIMIT ?"
+	queryBuilder.WriteString(" ORDER BY id ASC LIMIT ?")
+	query := queryBuilder.String()
 	args = append(args, limit)
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
@@ -93,14 +95,17 @@ func (s *SQLStore) HasSyncEventsAfter(
 	afterID int64,
 	domains []models.SyncDomain,
 ) (bool, error) {
-	query := `SELECT 1 FROM sync_events WHERE id > ?`
+	var queryBuilder strings.Builder
+	queryBuilder.WriteString("SELECT 1 FROM sync_events WHERE id > ?")
 	args := []any{afterID}
 	domainFilter, domainArgs := buildSyncDomainFilter(domains)
 	if domainFilter != "" {
-		query += " AND " + domainFilter
+		queryBuilder.WriteString(" AND ")
+		queryBuilder.WriteString(domainFilter)
 		args = append(args, domainArgs...)
 	}
-	query += " LIMIT 1"
+	queryBuilder.WriteString(" LIMIT 1")
+	query := queryBuilder.String()
 
 	var marker int
 	err := s.db.QueryRowContext(ctx, query, args...).Scan(&marker)
@@ -135,5 +140,9 @@ func buildSyncDomainFilter(domains []models.SyncDomain) (string, []any) {
 		placeholders[i] = "?"
 		args[i] = domain
 	}
-	return fmt.Sprintf("domain IN (%s)", strings.Join(placeholders, ",")), args
+	var filterBuilder strings.Builder
+	filterBuilder.WriteString("domain IN (")
+	filterBuilder.WriteString(strings.Join(placeholders, ","))
+	filterBuilder.WriteString(")")
+	return filterBuilder.String(), args
 }

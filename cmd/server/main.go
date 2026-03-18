@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"strings"
 
 	"github.com/shinyes/keer/internal/app"
 	"github.com/shinyes/keer/internal/config"
@@ -19,7 +18,7 @@ func main() {
 	}
 
 	printUsage()
-	log.Fatalf("unsupported args %q, only default startup is allowed", strings.Join(args, " "))
+	log.Fatal("unsupported args, only default startup is allowed")
 }
 
 func runServe() {

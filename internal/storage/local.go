@@ -16,10 +16,11 @@ type LocalStore struct {
 }
 
 func NewLocalStore(baseDir string) (*LocalStore, error) {
-	if err := os.MkdirAll(baseDir, 0o755); err != nil {
+	cleanBaseDir := filepath.Clean(baseDir)
+	if err := os.MkdirAll(cleanBaseDir, 0o750); err != nil {
 		return nil, fmt.Errorf("create uploads dir: %w", err)
 	}
-	return &LocalStore{baseDir: baseDir}, nil
+	return &LocalStore{baseDir: cleanBaseDir}, nil
 }
 
 func (s *LocalStore) Put(_ context.Context, key string, _ string, data []byte) (int64, error) {
@@ -27,14 +28,22 @@ func (s *LocalStore) Put(_ context.Context, key string, _ string, data []byte) (
 }
 
 func (s *LocalStore) PutStream(_ context.Context, key string, _ string, reader io.Reader, size int64) (int64, error) {
-	path, err := s.pathFor(key)
+	cleanKey, err := sanitizeStorageKey(key)
 	if err != nil {
 		return 0, err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return 0, fmt.Errorf("create upload parent: %w", err)
+	root, err := s.openBaseRoot()
+	if err != nil {
+		return 0, err
 	}
-	f, err := os.Create(path)
+	defer root.Close()
+	parentDir := filepath.Dir(cleanKey)
+	if parentDir != "." {
+		if err := root.MkdirAll(parentDir, 0o750); err != nil {
+			return 0, fmt.Errorf("create upload parent: %w", err)
+		}
+	}
+	f, err := root.OpenFile(cleanKey, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		return 0, fmt.Errorf("create upload file: %w", err)
 	}
@@ -51,14 +60,20 @@ func (s *LocalStore) PutStream(_ context.Context, key string, _ string, reader i
 }
 
 func (s *LocalStore) Open(_ context.Context, key string) (io.ReadCloser, error) {
-	path, err := s.pathFor(key)
+	cleanKey, err := sanitizeStorageKey(key)
 	if err != nil {
 		return nil, err
 	}
-	f, err := os.Open(path)
+	root, err := s.openBaseRoot()
 	if err != nil {
 		return nil, err
 	}
+	f, err := root.Open(cleanKey)
+	if err != nil {
+		_ = root.Close()
+		return nil, err
+	}
+	_ = root.Close()
 	return f, nil
 }
 
@@ -70,14 +85,20 @@ func (s *LocalStore) OpenRange(_ context.Context, key string, start int64, end i
 		return nil, fmt.Errorf("invalid range end")
 	}
 
-	path, err := s.pathFor(key)
+	cleanKey, err := sanitizeStorageKey(key)
 	if err != nil {
 		return nil, err
 	}
-	f, err := os.Open(path)
+	root, err := s.openBaseRoot()
 	if err != nil {
 		return nil, err
 	}
+	f, err := root.Open(cleanKey)
+	if err != nil {
+		_ = root.Close()
+		return nil, err
+	}
+	_ = root.Close()
 	if _, err := f.Seek(start, io.SeekStart); err != nil {
 		_ = f.Close()
 		return nil, fmt.Errorf("seek upload file: %w", err)
@@ -94,11 +115,16 @@ func (s *LocalStore) OpenRange(_ context.Context, key string, start int64, end i
 }
 
 func (s *LocalStore) Delete(_ context.Context, key string) error {
-	path, err := s.pathFor(key)
+	cleanKey, err := sanitizeStorageKey(key)
 	if err != nil {
 		return err
 	}
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+	root, err := s.openBaseRoot()
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	if err := root.Remove(cleanKey); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	return nil
@@ -141,19 +167,26 @@ type readerWithCloser struct {
 	io.Closer
 }
 
-func (s *LocalStore) pathFor(key string) (string, error) {
+func sanitizeStorageKey(key string) (string, error) {
 	cleanKey := filepath.ToSlash(filepath.Clean(strings.TrimSpace(key)))
 	cleanKey = strings.TrimPrefix(cleanKey, "/")
-	if cleanKey == "" || cleanKey == "." {
+	if cleanKey == "" || cleanKey == "." || cleanKey == ".." {
 		return "", fmt.Errorf("invalid storage key")
 	}
-	path := filepath.Join(s.baseDir, filepath.FromSlash(cleanKey))
-	rel, err := filepath.Rel(s.baseDir, path)
-	if err != nil {
-		return "", err
-	}
-	if strings.HasPrefix(rel, "..") {
+	if strings.HasPrefix(cleanKey, "../") || strings.Contains(cleanKey, ":") {
 		return "", fmt.Errorf("invalid storage key traversal")
 	}
-	return path, nil
+	keyPath := filepath.FromSlash(cleanKey)
+	if filepath.IsAbs(keyPath) {
+		return "", fmt.Errorf("invalid storage key traversal")
+	}
+	return keyPath, nil
+}
+
+func (s *LocalStore) openBaseRoot() (*os.Root, error) {
+	root, err := os.OpenRoot(s.baseDir)
+	if err != nil {
+		return nil, fmt.Errorf("open uploads dir root: %w", err)
+	}
+	return root, nil
 }

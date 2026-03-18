@@ -248,11 +248,14 @@ func (s *SQLStore) ListUsersByIdentifiersUpdatedWithin(
 		}
 	}
 
-	query += strings.Join(conditions, " OR ")
-	query += `)
+	var queryBuilder strings.Builder
+	queryBuilder.WriteString(query)
+	queryBuilder.WriteString(strings.Join(conditions, " OR "))
+	queryBuilder.WriteString(`)
 		AND update_time > ?
 		AND update_time <= ?
-		ORDER BY update_time ASC, id ASC`
+		ORDER BY update_time ASC, id ASC`)
+	query = queryBuilder.String()
 	args = append(args, updatedAfter.UTC().Format(time.RFC3339Nano))
 	args = append(args, updatedBeforeOrEqual.UTC().Format(time.RFC3339Nano))
 
@@ -568,11 +571,15 @@ func (s *SQLStore) PromoteUsersToAdminByUsername(ctx context.Context, usernames 
 	for _, username := range usernames {
 		args = append(args, username)
 	}
+	var queryBuilder strings.Builder
+	queryBuilder.WriteString(`UPDATE users
+		SET role = 'ADMIN', update_time = ?
+		WHERE username COLLATE NOCASE IN (`)
+	queryBuilder.WriteString(placeholders)
+	queryBuilder.WriteString(`)`)
 	_, err := s.db.ExecContext(
 		ctx,
-		`UPDATE users
-		SET role = 'ADMIN', update_time = ?
-		WHERE username COLLATE NOCASE IN (`+placeholders+`)`,
+		queryBuilder.String(),
 		args...,
 	)
 	return err

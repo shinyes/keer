@@ -187,7 +187,11 @@ func (s *SQLStore) UpdateMemoWithAttachments(ctx context.Context, memoID int64, 
 	args = append(args, time.Now().UTC().Format(time.RFC3339Nano))
 	args = append(args, memoID)
 
-	query := fmt.Sprintf(`UPDATE memos SET %s WHERE id = ?`, strings.Join(assignments, ", "))
+	var queryBuilder strings.Builder
+	queryBuilder.WriteString("UPDATE memos SET ")
+	queryBuilder.WriteString(strings.Join(assignments, ", "))
+	queryBuilder.WriteString(" WHERE id = ?")
+	query := queryBuilder.String()
 	if _, err := tx.ExecContext(ctx, query, args...); err != nil {
 		return models.Memo{}, err
 	}
@@ -327,27 +331,39 @@ func (s *SQLStore) ListVisibleMemos(
 	}
 
 	if len(prefilter.CreatorIDs) > 0 {
-		placeholders := strings.TrimRight(strings.Repeat("?,", len(prefilter.CreatorIDs)), ",")
-		query += ` AND m.creator_id IN (` + placeholders + `)`
-		for _, id := range prefilter.CreatorIDs {
+		query += ` AND m.creator_id IN (`
+		for i, id := range prefilter.CreatorIDs {
+			if i > 0 {
+				query += `,`
+			}
+			query += `?`
 			args = append(args, id)
 		}
+		query += `)`
 	}
 
 	if len(prefilter.VisibilityIn) > 0 {
-		placeholders := strings.TrimRight(strings.Repeat("?,", len(prefilter.VisibilityIn)), ",")
-		query += ` AND m.visibility IN (` + placeholders + `)`
-		for _, v := range prefilter.VisibilityIn {
+		query += ` AND m.visibility IN (`
+		for i, v := range prefilter.VisibilityIn {
+			if i > 0 {
+				query += `,`
+			}
+			query += `?`
 			args = append(args, v)
 		}
+		query += `)`
 	}
 
 	if len(prefilter.StateIn) > 0 {
-		placeholders := strings.TrimRight(strings.Repeat("?,", len(prefilter.StateIn)), ",")
-		query += ` AND m.state IN (` + placeholders + `)`
-		for _, st := range prefilter.StateIn {
+		query += ` AND m.state IN (`
+		for i, st := range prefilter.StateIn {
+			if i > 0 {
+				query += `,`
+			}
+			query += `?`
 			args = append(args, st)
 		}
+		query += `)`
 	}
 
 	if prefilter.Pinned != nil {
@@ -355,20 +371,35 @@ func (s *SQLStore) ListVisibleMemos(
 		args = append(args, boolToSQLiteInt(*prefilter.Pinned))
 	}
 
-	addPropertyConstraint := func(column string, value *bool) {
-		if value == nil {
-			return
-		}
-		query += fmt.Sprintf(` AND m.%s = ?`, column)
-		args = append(args, boolToSQLiteInt(*value))
+	if prefilter.HasLink != nil {
+		query += ` AND m.has_link = ?`
+		args = append(args, boolToSQLiteInt(*prefilter.HasLink))
 	}
-	addPropertyConstraint("has_link", prefilter.HasLink)
-	addPropertyConstraint("has_task_list", prefilter.HasTaskList)
-	addPropertyConstraint("has_code", prefilter.HasCode)
-	addPropertyConstraint("has_incomplete_tasks", prefilter.HasIncompleteTasks)
+	if prefilter.HasTaskList != nil {
+		query += ` AND m.has_task_list = ?`
+		args = append(args, boolToSQLiteInt(*prefilter.HasTaskList))
+	}
+	if prefilter.HasCode != nil {
+		query += ` AND m.has_code = ?`
+		args = append(args, boolToSQLiteInt(*prefilter.HasCode))
+	}
+	if prefilter.HasIncompleteTasks != nil {
+		query += ` AND m.has_incomplete_tasks = ?`
+		args = append(args, boolToSQLiteInt(*prefilter.HasIncompleteTasks))
+	}
 
 	for _, group := range prefilter.TagGroups {
 		if len(group.Options) == 0 {
+			continue
+		}
+		validOptionCount := 0
+		for _, option := range group.Options {
+			switch option.Kind {
+			case TagMatchExact, TagMatchPrefix:
+				validOptionCount++
+			}
+		}
+		if validOptionCount == 0 {
 			continue
 		}
 		query += ` AND EXISTS (
@@ -376,24 +407,39 @@ func (s *SQLStore) ListVisibleMemos(
 			FROM memo_tags mt
 			JOIN tags t ON t.id = mt.tag_id
 			WHERE mt.memo_id = m.id AND `
-		groupClauses := make([]string, 0, len(group.Options))
+		addedClauses := 0
 		for _, option := range group.Options {
 			switch option.Kind {
 			case TagMatchExact:
-				groupClauses = append(groupClauses, `t.name = ?`)
+				if addedClauses > 0 {
+					query += ` OR `
+				}
+				query += `t.name = ?`
+				addedClauses++
 				args = append(args, option.Value)
 			case TagMatchPrefix:
-				groupClauses = append(groupClauses, `t.name LIKE ?`)
+				if addedClauses > 0 {
+					query += ` OR `
+				}
+				query += `t.name LIKE ?`
+				addedClauses++
 				args = append(args, option.Value+"%")
 			}
 		}
-		if len(groupClauses) == 0 {
-			continue
-		}
-		query += strings.Join(groupClauses, " OR ") + `)`
+		query += `)`
 	}
 	for _, group := range prefilter.ExcludeTagGroups {
 		if len(group.Options) == 0 {
+			continue
+		}
+		validOptionCount := 0
+		for _, option := range group.Options {
+			switch option.Kind {
+			case TagMatchExact, TagMatchPrefix:
+				validOptionCount++
+			}
+		}
+		if validOptionCount == 0 {
 			continue
 		}
 		query += ` AND NOT EXISTS (
@@ -401,21 +447,26 @@ func (s *SQLStore) ListVisibleMemos(
 			FROM memo_tags mt
 			JOIN tags t ON t.id = mt.tag_id
 			WHERE mt.memo_id = m.id AND `
-		groupClauses := make([]string, 0, len(group.Options))
+		addedClauses := 0
 		for _, option := range group.Options {
 			switch option.Kind {
 			case TagMatchExact:
-				groupClauses = append(groupClauses, `t.name = ?`)
+				if addedClauses > 0 {
+					query += ` OR `
+				}
+				query += `t.name = ?`
+				addedClauses++
 				args = append(args, option.Value)
 			case TagMatchPrefix:
-				groupClauses = append(groupClauses, `t.name LIKE ?`)
+				if addedClauses > 0 {
+					query += ` OR `
+				}
+				query += `t.name LIKE ?`
+				addedClauses++
 				args = append(args, option.Value+"%")
 			}
 		}
-		if len(groupClauses) == 0 {
-			continue
-		}
-		query += strings.Join(groupClauses, " OR ") + `)`
+		query += `)`
 	}
 
 	if bounds != nil && (bounds.UpdatedAfter != nil || bounds.UpdatedBeforeOrEqual != nil) {
@@ -470,10 +521,12 @@ func (s *SQLStore) ListVisibleMemosByIDs(ctx context.Context, viewerID int64, me
 
 	placeholders := strings.TrimRight(strings.Repeat("?,", len(normalizedIDs)), ",")
 	collaboratorTag := fmt.Sprintf("collab/%d", viewerID)
-	query := fmt.Sprintf(
-		`SELECT m.id, m.creator_id, m.content, m.payload_envelope, m.visibility, m.state, m.pinned, m.create_time, m.update_time, m.display_time, m.latitude, m.longitude, m.has_link, m.has_task_list, m.has_code, m.has_incomplete_tasks
+	var queryBuilder strings.Builder
+	queryBuilder.WriteString(`SELECT m.id, m.creator_id, m.content, m.payload_envelope, m.visibility, m.state, m.pinned, m.create_time, m.update_time, m.display_time, m.latitude, m.longitude, m.has_link, m.has_task_list, m.has_code, m.has_incomplete_tasks
 		FROM memos m
-		WHERE m.id IN (%s)
+		WHERE m.id IN (`)
+	queryBuilder.WriteString(placeholders)
+	queryBuilder.WriteString(`)
 			AND (
 				m.creator_id = ?
 				OR m.visibility IN ('PUBLIC', 'PROTECTED')
@@ -484,9 +537,8 @@ func (s *SQLStore) ListVisibleMemosByIDs(ctx context.Context, viewerID int64, me
 					WHERE mt.memo_id = m.id AND t.name = ?
 				)
 			)
-		ORDER BY m.id ASC`,
-		placeholders,
-	)
+		ORDER BY m.id ASC`)
+	query := queryBuilder.String()
 
 	args := make([]any, 0, len(normalizedIDs)+2)
 	for _, memoID := range normalizedIDs {
@@ -1315,14 +1367,15 @@ func (s *SQLStore) ListAttachmentsByMemoIDs(ctx context.Context, memoIDs []int64
 		args = append(args, memoID)
 	}
 
-	query := fmt.Sprintf(
-		`SELECT ma.memo_id, a.id, a.creator_id, a.filename, a.external_link, a.type, a.size, a.encryption_metadata, ma.association_encryption_metadata, a.storage_type, a.storage_key, a.thumbnail_filename, a.thumbnail_type, a.thumbnail_size, a.thumbnail_storage_type, a.thumbnail_storage_key, a.create_time
+	var queryBuilder strings.Builder
+	queryBuilder.WriteString(`SELECT ma.memo_id, a.id, a.creator_id, a.filename, a.external_link, a.type, a.size, a.encryption_metadata, ma.association_encryption_metadata, a.storage_type, a.storage_key, a.thumbnail_filename, a.thumbnail_type, a.thumbnail_size, a.thumbnail_storage_type, a.thumbnail_storage_key, a.create_time
 		FROM memo_attachments ma
 		JOIN attachments a ON a.id = ma.attachment_id
-		WHERE ma.memo_id IN (%s)
-		ORDER BY ma.memo_id, ma.position ASC, ma.attachment_id ASC`,
-		strings.Join(placeholders, ","),
-	)
+		WHERE ma.memo_id IN (`)
+	queryBuilder.WriteString(strings.Join(placeholders, ","))
+	queryBuilder.WriteString(`)
+		ORDER BY ma.memo_id, ma.position ASC, ma.attachment_id ASC`)
+	query := queryBuilder.String()
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -1411,14 +1464,15 @@ func (s *SQLStore) listMemoTagsByMemoIDs(ctx context.Context, memoIDs []int64) (
 		args = append(args, memoID)
 	}
 
-	query := fmt.Sprintf(
-		`SELECT mt.memo_id, t.name
+	var queryBuilder strings.Builder
+	queryBuilder.WriteString(`SELECT mt.memo_id, t.name
 		FROM memo_tags mt
 		JOIN tags t ON t.id = mt.tag_id
-		WHERE mt.memo_id IN (%s)
-		ORDER BY mt.memo_id, t.name`,
-		strings.Join(placeholders, ","),
-	)
+		WHERE mt.memo_id IN (`)
+	queryBuilder.WriteString(strings.Join(placeholders, ","))
+	queryBuilder.WriteString(`)
+		ORDER BY mt.memo_id, t.name`)
+	query := queryBuilder.String()
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err

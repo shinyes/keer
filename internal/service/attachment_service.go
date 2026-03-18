@@ -280,11 +280,11 @@ func (s *AttachmentService) CreateAttachmentUploadSession(ctx context.Context, u
 
 	thumbnailTempPath := ""
 	if len(thumbnailData) > 0 {
-		if err := os.MkdirAll(s.tempDir, 0o755); err != nil {
+		if err := os.MkdirAll(s.tempDir, 0o750); err != nil {
 			return models.AttachmentUploadSession{}, fmt.Errorf("create upload temp dir: %w", err)
 		}
 		thumbnailTempPath = filepath.Join(s.tempDir, uploadID+".thumb")
-		if err := os.WriteFile(thumbnailTempPath, thumbnailData, 0o644); err != nil {
+		if err := os.WriteFile(thumbnailTempPath, thumbnailData, 0o600); err != nil {
 			return models.AttachmentUploadSession{}, fmt.Errorf("create upload thumbnail temp file: %w", err)
 		}
 	}
@@ -332,21 +332,30 @@ func (s *AttachmentService) CreateAttachmentUploadSession(ctx context.Context, u
 		return session, nil
 	}
 
-	if err := os.MkdirAll(s.tempDir, 0o755); err != nil {
+	if err := os.MkdirAll(s.tempDir, 0o750); err != nil {
 		if thumbnailTempPath != "" {
 			_ = os.Remove(thumbnailTempPath)
 		}
 		return models.AttachmentUploadSession{}, fmt.Errorf("create upload temp dir: %w", err)
 	}
 	tempPath := filepath.Join(s.tempDir, uploadID+".part")
-	tempFile, err := os.OpenFile(tempPath, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0o644)
+	tempRoot, err := os.OpenRoot(s.tempDir)
 	if err != nil {
+		if thumbnailTempPath != "" {
+			_ = os.Remove(thumbnailTempPath)
+		}
+		return models.AttachmentUploadSession{}, fmt.Errorf("open upload temp dir root: %w", err)
+	}
+	tempFile, err := tempRoot.OpenFile(uploadID+".part", os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0o600)
+	if err != nil {
+		_ = tempRoot.Close()
 		if thumbnailTempPath != "" {
 			_ = os.Remove(thumbnailTempPath)
 		}
 		return models.AttachmentUploadSession{}, fmt.Errorf("create upload temp file: %w", err)
 	}
 	_ = tempFile.Close()
+	_ = tempRoot.Close()
 
 	now := time.Now().UTC()
 	session, err := s.store.CreateAttachmentUploadSession(ctx, models.AttachmentUploadSession{
@@ -621,7 +630,7 @@ func (s *AttachmentService) AppendAttachmentUploadChunk(ctx context.Context, use
 		return models.AttachmentUploadSession{}, ErrUploadExceedsTotalSize
 	}
 
-	file, err := os.OpenFile(session.TempPath, os.O_WRONLY, 0o644)
+	file, err := os.OpenFile(session.TempPath, os.O_WRONLY, 0o600)
 	if err != nil {
 		return models.AttachmentUploadSession{}, fmt.Errorf("open upload temp file: %w", err)
 	}
@@ -688,7 +697,7 @@ func (s *AttachmentService) CompleteAttachmentUploadSession(ctx context.Context,
 		return models.Attachment{}, ErrUploadNotComplete
 	}
 
-	contentHash, err := hashFileSHA256(session.TempPath)
+	contentHash, err := s.hashTempFileSHA256(session.TempPath)
 	if err != nil {
 		return models.Attachment{}, err
 	}
@@ -731,17 +740,19 @@ func (s *AttachmentService) CompleteAttachmentUploadSession(ctx context.Context,
 		if err != nil {
 			return models.Attachment{}, err
 		}
-		file, err := os.Open(session.TempPath)
+		file, tempRoot, err := s.openTempFileForRead(session.TempPath)
 		if err != nil {
 			return models.Attachment{}, fmt.Errorf("open upload temp file: %w", err)
 		}
 		defaultStorage := s.defaultStorage()
 		if defaultStorage == nil {
 			_ = file.Close()
+			_ = tempRoot.Close()
 			return models.Attachment{}, fmt.Errorf("attachment storage is not configured")
 		}
 		size, uploadErr := defaultStorage.PutStream(ctx, storageKey, session.Type, file, session.Size)
 		_ = file.Close()
+		_ = tempRoot.Close()
 		if uploadErr != nil {
 			return models.Attachment{}, uploadErr
 		}
@@ -1160,18 +1171,53 @@ func storageTypeName(s storage.Store) string {
 	return storage.NormalizeType(s.Type())
 }
 
-func hashFileSHA256(path string) (string, error) {
-	f, err := os.Open(path)
+func (s *AttachmentService) hashTempFileSHA256(path string) (string, error) {
+	f, tempRoot, err := s.openTempFileForRead(path)
 	if err != nil {
 		return "", fmt.Errorf("open upload temp file for hash: %w", err)
 	}
 	defer f.Close()
+	defer tempRoot.Close()
 
 	hasher := sha256.New()
 	if _, err := io.Copy(hasher, f); err != nil {
 		return "", fmt.Errorf("hash upload temp file: %w", err)
 	}
 	return hex.EncodeToString(hasher.Sum(nil)), nil
+}
+
+func (s *AttachmentService) openTempFileForRead(path string) (*os.File, *os.Root, error) {
+	relPath, err := s.tempRelativePath(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	tempRoot, err := os.OpenRoot(filepath.Clean(strings.TrimSpace(s.tempDir)))
+	if err != nil {
+		return nil, nil, err
+	}
+	f, err := tempRoot.Open(relPath)
+	if err != nil {
+		_ = tempRoot.Close()
+		return nil, nil, err
+	}
+	return f, tempRoot, nil
+}
+
+func (s *AttachmentService) tempRelativePath(path string) (string, error) {
+	baseDir := filepath.Clean(strings.TrimSpace(s.tempDir))
+	targetPath := filepath.Clean(strings.TrimSpace(path))
+	if baseDir == "" || targetPath == "" {
+		return "", fmt.Errorf("invalid temp file path")
+	}
+	relPath, err := filepath.Rel(baseDir, targetPath)
+	if err != nil {
+		return "", fmt.Errorf("resolve temp file path: %w", err)
+	}
+	relPath = filepath.Clean(relPath)
+	if relPath == "." || relPath == "" || filepath.IsAbs(relPath) || strings.HasPrefix(relPath, "..") {
+		return "", fmt.Errorf("invalid temp file path traversal")
+	}
+	return relPath, nil
 }
 
 func encodeDirectSessionPath(storageKey string) string {

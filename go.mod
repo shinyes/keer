@@ -1,6 +1,6 @@
 module github.com/shinyes/keer
 
-go 1.25.5
+go 1.25.8
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.41.1
@@ -8,7 +8,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.9
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.96.0
 	github.com/aws/smithy-go v1.24.0
-	github.com/gofiber/fiber/v2 v2.52.11
+	github.com/gofiber/fiber/v2 v2.52.12
 	github.com/google/cel-go v0.27.0
 	github.com/yuin/goldmark v1.7.16
 	golang.org/x/crypto v0.48.0
