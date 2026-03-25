@@ -223,6 +223,44 @@ func NewRouter(
 		return c.JSON(buildAPIAttachment(attachment, ""))
 	})
 
+	api.Post("/attachments/:id/thumbnail", func(c *fiber.Ctx) error {
+		currentUser := CurrentUser(c)
+		attachmentID, err := parseID(c.Params("id"))
+		if err != nil {
+			return badRequest(c, "invalid attachment id")
+		}
+
+		var req updateAttachmentThumbnailRequest
+		if err := c.BodyParser(&req); err != nil {
+			return badRequest(c, "invalid request body")
+		}
+
+		attachment, err := attachmentService.UpdateAttachmentThumbnail(
+			c.Context(),
+			currentUser.ID,
+			attachmentID,
+			service.UpdateAttachmentThumbnailInput{
+				Filename:                req.Filename,
+				Type:                    req.Type,
+				Content:                 req.Content,
+				ThumbnailBlobEncryption: req.ThumbnailBlobEncryption,
+			},
+		)
+		if err != nil {
+			switch {
+			case errors.Is(err, sql.ErrNoRows):
+				return notFound(c, "attachment not found")
+			case errors.Is(err, service.ErrAttachmentPermissionDenied):
+				return c.SendStatus(fiber.StatusForbidden)
+			case errors.Is(err, service.ErrInvalidAttachmentThumbnail):
+				return badRequest(c, err.Error())
+			default:
+				return internalError(c, err)
+			}
+		}
+		return c.JSON(buildAPIAttachment(attachment, ""))
+	})
+
 	api.Post("/attachments/uploads", func(c *fiber.Ctx) error {
 		currentUser := CurrentUser(c)
 		var req createAttachmentUploadSessionRequest

@@ -74,6 +74,13 @@ type CreateAttachmentUploadSessionThumbnailInput struct {
 	Content  string
 }
 
+type UpdateAttachmentThumbnailInput struct {
+	Filename                string
+	Type                    string
+	Content                 string
+	ThumbnailBlobEncryption *string
+}
+
 type StorageCleanupResult struct {
 	ScannedKeys int
 	DeletedKeys int
@@ -81,12 +88,14 @@ type StorageCleanupResult struct {
 }
 
 var (
-	ErrUploadSessionNotFound  = errors.New("upload session not found")
-	ErrUploadOffsetMismatch   = errors.New("upload offset mismatch")
-	ErrUploadExceedsTotalSize = errors.New("upload exceeds total size")
-	ErrUploadNotComplete      = errors.New("upload not complete")
-	ErrUploadChunkUnsupported = errors.New("upload chunk is not supported for this session")
-	ErrMultipartPartInvalid   = errors.New("multipart upload part is invalid")
+	ErrUploadSessionNotFound      = errors.New("upload session not found")
+	ErrUploadOffsetMismatch       = errors.New("upload offset mismatch")
+	ErrUploadExceedsTotalSize     = errors.New("upload exceeds total size")
+	ErrUploadNotComplete          = errors.New("upload not complete")
+	ErrUploadChunkUnsupported     = errors.New("upload chunk is not supported for this session")
+	ErrMultipartPartInvalid       = errors.New("multipart upload part is invalid")
+	ErrAttachmentPermissionDenied = errors.New("attachment permission denied")
+	ErrInvalidAttachmentThumbnail = errors.New("invalid attachment thumbnail")
 )
 
 type UploadOffsetMismatchError struct {
@@ -952,6 +961,86 @@ func (s *AttachmentService) ListAttachments(ctx context.Context, userID int64) (
 	return s.store.ListAttachmentsByCreator(ctx, userID)
 }
 
+func (s *AttachmentService) UpdateAttachmentThumbnail(
+	ctx context.Context,
+	userID int64,
+	attachmentID int64,
+	input UpdateAttachmentThumbnailInput,
+) (models.Attachment, error) {
+	attachment, err := s.store.GetAttachmentByID(ctx, attachmentID)
+	if err != nil {
+		return models.Attachment{}, err
+	}
+	if attachment.CreatorID != userID {
+		return models.Attachment{}, ErrAttachmentPermissionDenied
+	}
+
+	content := strings.TrimSpace(input.Content)
+	if content == "" {
+		return models.Attachment{}, fmt.Errorf("%w: content cannot be empty", ErrInvalidAttachmentThumbnail)
+	}
+	data, err := base64.StdEncoding.DecodeString(content)
+	if err != nil {
+		return models.Attachment{}, fmt.Errorf("%w: invalid base64 content", ErrInvalidAttachmentThumbnail)
+	}
+	if len(data) == 0 {
+		return models.Attachment{}, fmt.Errorf("%w: content cannot be empty", ErrInvalidAttachmentThumbnail)
+	}
+	if len(data) > thumbnailUploadMaxSize {
+		return models.Attachment{}, fmt.Errorf("%w: content too large", ErrInvalidAttachmentThumbnail)
+	}
+
+	thumbnailFilename := sanitizeFilename(input.Filename)
+	if thumbnailFilename == "" {
+		thumbnailFilename = buildThumbnailFilename(attachment.Filename)
+	}
+	thumbnailType := strings.TrimSpace(input.Type)
+	if thumbnailType == "" {
+		thumbnailType = thumbnailContentType
+	}
+
+	thumbnailKey := thumbnailStorageKey(attachment.StorageKey)
+	if thumbnailKey == "" {
+		return models.Attachment{}, fmt.Errorf("invalid attachment storage key")
+	}
+	store, err := s.storageForType(attachment.StorageType)
+	if err != nil {
+		return models.Attachment{}, err
+	}
+	thumbnailSize, err := store.Put(ctx, thumbnailKey, thumbnailType, data)
+	if err != nil {
+		return models.Attachment{}, fmt.Errorf("store thumbnail: %w", err)
+	}
+	if thumbnailSize <= 0 {
+		return models.Attachment{}, fmt.Errorf("store thumbnail failed")
+	}
+
+	if err := s.store.UpdateAttachmentThumbnail(
+		ctx,
+		attachmentID,
+		thumbnailFilename,
+		thumbnailType,
+		thumbnailSize,
+		storageTypeName(store),
+		thumbnailKey,
+	); err != nil {
+		return models.Attachment{}, err
+	}
+
+	if input.ThumbnailBlobEncryption != nil {
+		if err := s.patchAttachmentThumbnailBlobEncryptionMetadata(
+			ctx,
+			attachmentID,
+			attachment.EncryptionMetadata,
+			*input.ThumbnailBlobEncryption,
+		); err != nil {
+			return models.Attachment{}, err
+		}
+	}
+
+	return s.store.GetAttachmentByID(ctx, attachmentID)
+}
+
 func (s *AttachmentService) rollbackCreatedAttachment(ctx context.Context, userID int64, attachmentID int64, cause error) error {
 	if attachmentID <= 0 || cause == nil {
 		return cause
@@ -1124,6 +1213,86 @@ func (s *AttachmentService) attachToMemo(ctx context.Context, memoID int64, atta
 		attachments = append(attachments, store.AttachmentBinding{AttachmentID: attachmentID})
 	}
 	return s.store.SetMemoAttachments(ctx, memoID, attachments)
+}
+
+func (s *AttachmentService) patchAttachmentThumbnailBlobEncryptionMetadata(
+	ctx context.Context,
+	attachmentID int64,
+	attachmentEncryptionMetadata string,
+	thumbnailBlobEncryption string,
+) error {
+	trimmedAttachmentMetadata := strings.TrimSpace(attachmentEncryptionMetadata)
+	trimmedThumbnailBlobEncryption := strings.TrimSpace(thumbnailBlobEncryption)
+	if trimmedAttachmentMetadata == "" {
+		if trimmedThumbnailBlobEncryption != "" {
+			return fmt.Errorf("%w: thumbnailBlobEncryption requires encrypted attachment metadata", ErrInvalidAttachmentThumbnail)
+		}
+		return nil
+	}
+
+	updatedAttachmentMetadata, err := patchThumbnailBlobEncryptionMetadata(
+		trimmedAttachmentMetadata,
+		trimmedThumbnailBlobEncryption,
+	)
+	if err != nil {
+		return err
+	}
+	if err := s.store.UpdateAttachmentEncryptionMetadata(ctx, attachmentID, updatedAttachmentMetadata); err != nil {
+		return err
+	}
+
+	memoAssociations, err := s.store.ListMemoAttachmentAssociationMetadataByAttachmentID(ctx, attachmentID)
+	if err != nil {
+		return err
+	}
+	for _, association := range memoAssociations {
+		trimmedAssociationMetadata := strings.TrimSpace(association.AssociationEncryptionMetadata)
+		if trimmedAssociationMetadata == "" {
+			continue
+		}
+		updatedAssociationMetadata, err := patchThumbnailBlobEncryptionMetadata(
+			trimmedAssociationMetadata,
+			trimmedThumbnailBlobEncryption,
+		)
+		if err != nil {
+			return err
+		}
+		if err := s.store.UpdateMemoAttachmentAssociationEncryptionMetadata(
+			ctx,
+			association.MemoID,
+			association.AttachmentID,
+			updatedAssociationMetadata,
+		); err != nil {
+			return err
+		}
+	}
+
+	groupAssociations, err := s.store.ListGroupMessageAttachmentAssociationMetadataByAttachmentID(ctx, attachmentID)
+	if err != nil {
+		return err
+	}
+	for _, association := range groupAssociations {
+		trimmedAssociationMetadata := strings.TrimSpace(association.AssociationEncryptionMetadata)
+		if trimmedAssociationMetadata == "" {
+			continue
+		}
+		updatedAssociationMetadata, err := patchThumbnailBlobEncryptionMetadata(
+			trimmedAssociationMetadata,
+			trimmedThumbnailBlobEncryption,
+		)
+		if err != nil {
+			return err
+		}
+		if err := s.store.UpdateGroupMessageAttachmentAssociationEncryptionMetadata(
+			ctx,
+			association.MessageID,
+			association.AttachmentID,
+			updatedAssociationMetadata,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *AttachmentService) newAttachmentStorageKey(ctx context.Context, userID int64, filename string) (string, error) {

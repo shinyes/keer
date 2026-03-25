@@ -42,6 +42,18 @@ type AttachmentBinding struct {
 	AssociationEncryptionMetadata string
 }
 
+type MemoAttachmentAssociationMetadata struct {
+	MemoID                        int64
+	AttachmentID                  int64
+	AssociationEncryptionMetadata string
+}
+
+type GroupMessageAttachmentAssociationMetadata struct {
+	MessageID                     int64
+	AttachmentID                  int64
+	AssociationEncryptionMetadata string
+}
+
 type MemoQueryBounds struct {
 	UpdatedAfter         *time.Time
 	UpdatedBeforeOrEqual *time.Time

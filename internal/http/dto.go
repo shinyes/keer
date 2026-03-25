@@ -328,6 +328,13 @@ type createAttachmentUploadThumbnailRequest struct {
 	Content  string `json:"content"`
 }
 
+type updateAttachmentThumbnailRequest struct {
+	Filename                string  `json:"filename"`
+	Type                    string  `json:"type"`
+	Content                 string  `json:"content"`
+	ThumbnailBlobEncryption *string `json:"thumbnailBlobEncryption"`
+}
+
 type attachmentUploadSessionResponse struct {
 	UploadID           string  `json:"uploadId"`
 	Filename           string  `json:"filename"`

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"image"
 	"image/color"
 	"image/jpeg"
@@ -12,9 +13,11 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/shinyes/keer/internal/models"
 	"github.com/shinyes/keer/internal/storage"
+	"github.com/shinyes/keer/internal/store"
 )
 
 func TestParseMemoID_CompatibilityFormats(t *testing.T) {
@@ -263,6 +266,148 @@ func TestCreateAttachment_DoesNotGenerateThumbnailForNonImage(t *testing.T) {
 	if attachment.ThumbnailStorageKey != "" {
 		t.Fatalf("unexpected thumbnail exists for non-image attachment")
 	}
+}
+
+func TestUpdateAttachmentThumbnail_PatchesEncryptionMetadataAndAssociations(t *testing.T) {
+	services := setupTestServices(t)
+	localStore, err := storage.NewLocalStore(filepath.Join(t.TempDir(), "uploads"))
+	if err != nil {
+		t.Fatalf("NewLocalStore() error = %v", err)
+	}
+	attachmentService := NewAttachmentService(services.store, storage.NewRouter(storage.TypeLocal, localStore))
+	user := mustCreateUser(t, services.store, "attach-thumb-patch-meta")
+
+	attachmentMetadata := mustBuildAttachmentMetadataJSON(t, map[string]any{
+		"descriptorCiphertext": "descriptor-main",
+		"blobEncryption":       "blob-main",
+	})
+	associationMetadata := mustBuildAttachmentMetadataJSON(t, map[string]any{
+		"descriptorCiphertext": "descriptor-association",
+		"blobEncryption":       "blob-association",
+	})
+	attachment, err := attachmentService.CreateAttachment(context.Background(), user.ID, CreateAttachmentInput{
+		Filename:           "photo.jpg",
+		Type:               "image/jpeg",
+		Content:            base64.StdEncoding.EncodeToString(generateTestJPEGBytes(t, 720, 480)),
+		EncryptionMetadata: attachmentMetadata,
+	})
+	if err != nil {
+		t.Fatalf("CreateAttachment() error = %v", err)
+	}
+
+	memo, err := services.store.CreateMemo(
+		context.Background(),
+		user.ID,
+		"memo-content",
+		"",
+		models.VisibilityPrivate,
+		models.MemoStateNormal,
+		false,
+		models.MemoPayload{},
+		time.Now().UTC(),
+		nil,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("CreateMemo() error = %v", err)
+	}
+	if err := services.store.SetMemoAttachments(context.Background(), memo.ID, []store.AttachmentBinding{
+		{
+			AttachmentID:                  attachment.ID,
+			AssociationEncryptionMetadata: associationMetadata,
+		},
+	}); err != nil {
+		t.Fatalf("SetMemoAttachments() error = %v", err)
+	}
+
+	group, err := services.store.CreateGroup(context.Background(), user.ID, "thumb-meta-group", "desc")
+	if err != nil {
+		t.Fatalf("CreateGroup() error = %v", err)
+	}
+	if _, err := services.store.CreateGroupMessage(
+		context.Background(),
+		group.ID,
+		user.ID,
+		"hello",
+		"",
+		nil,
+		[]store.AttachmentBinding{
+			{
+				AttachmentID:                  attachment.ID,
+				AssociationEncryptionMetadata: associationMetadata,
+			},
+		},
+	); err != nil {
+		t.Fatalf("CreateGroupMessage() error = %v", err)
+	}
+
+	thumbnailBlobEncryption := "thumb-updated"
+	updated, err := attachmentService.UpdateAttachmentThumbnail(
+		context.Background(),
+		user.ID,
+		attachment.ID,
+		UpdateAttachmentThumbnailInput{
+			Filename:                "photo.thumb.bin",
+			Type:                    "image/jpeg",
+			Content:                 base64.StdEncoding.EncodeToString(generateTestJPEGBytes(t, 320, 180)),
+			ThumbnailBlobEncryption: &thumbnailBlobEncryption,
+		},
+	)
+	if err != nil {
+		t.Fatalf("UpdateAttachmentThumbnail() error = %v", err)
+	}
+	if updated.ThumbnailFilename != "photo.thumb.bin" {
+		t.Fatalf("expected thumbnail filename updated, got %q", updated.ThumbnailFilename)
+	}
+
+	attachmentAfter, err := services.store.GetAttachmentByID(context.Background(), attachment.ID)
+	if err != nil {
+		t.Fatalf("GetAttachmentByID() error = %v", err)
+	}
+	if got := mustReadMetadataField(t, attachmentAfter.EncryptionMetadata, "thumbnailBlobEncryption"); got != thumbnailBlobEncryption {
+		t.Fatalf("expected attachment thumbnailBlobEncryption=%q, got %q", thumbnailBlobEncryption, got)
+	}
+
+	memoAssociations, err := services.store.ListMemoAttachmentAssociationMetadataByAttachmentID(context.Background(), attachment.ID)
+	if err != nil {
+		t.Fatalf("ListMemoAttachmentAssociationMetadataByAttachmentID() error = %v", err)
+	}
+	if len(memoAssociations) == 0 {
+		t.Fatalf("expected memo association metadata rows")
+	}
+	if got := mustReadMetadataField(t, memoAssociations[0].AssociationEncryptionMetadata, "thumbnailBlobEncryption"); got != thumbnailBlobEncryption {
+		t.Fatalf("expected memo association thumbnailBlobEncryption=%q, got %q", thumbnailBlobEncryption, got)
+	}
+
+	groupAssociations, err := services.store.ListGroupMessageAttachmentAssociationMetadataByAttachmentID(context.Background(), attachment.ID)
+	if err != nil {
+		t.Fatalf("ListGroupMessageAttachmentAssociationMetadataByAttachmentID() error = %v", err)
+	}
+	if len(groupAssociations) == 0 {
+		t.Fatalf("expected group association metadata rows")
+	}
+	if got := mustReadMetadataField(t, groupAssociations[0].AssociationEncryptionMetadata, "thumbnailBlobEncryption"); got != thumbnailBlobEncryption {
+		t.Fatalf("expected group association thumbnailBlobEncryption=%q, got %q", thumbnailBlobEncryption, got)
+	}
+}
+
+func mustBuildAttachmentMetadataJSON(t *testing.T, payload map[string]any) string {
+	t.Helper()
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("json marshal failed: %v", err)
+	}
+	return string(data)
+}
+
+func mustReadMetadataField(t *testing.T, metadata string, key string) string {
+	t.Helper()
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(metadata), &payload); err != nil {
+		t.Fatalf("json unmarshal failed: %v", err)
+	}
+	value, _ := payload[key].(string)
+	return strings.TrimSpace(value)
 }
 
 func TestCompleteAttachmentUploadSession_UsesClientProvidedThumbnail(t *testing.T) {

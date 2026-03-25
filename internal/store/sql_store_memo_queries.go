@@ -773,6 +773,72 @@ func (s *SQLStore) UpdateAttachmentThumbnail(
 	return err
 }
 
+func (s *SQLStore) UpdateAttachmentEncryptionMetadata(
+	ctx context.Context,
+	attachmentID int64,
+	encryptionMetadata string,
+) error {
+	_, err := s.db.ExecContext(
+		ctx,
+		`UPDATE attachments SET encryption_metadata = ? WHERE id = ?`,
+		strings.TrimSpace(encryptionMetadata),
+		attachmentID,
+	)
+	return err
+}
+
+func (s *SQLStore) ListMemoAttachmentAssociationMetadataByAttachmentID(
+	ctx context.Context,
+	attachmentID int64,
+) ([]MemoAttachmentAssociationMetadata, error) {
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT memo_id, attachment_id, association_encryption_metadata
+		FROM memo_attachments
+		WHERE attachment_id = ?`,
+		attachmentID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make([]MemoAttachmentAssociationMetadata, 0)
+	for rows.Next() {
+		var item MemoAttachmentAssociationMetadata
+		if err := rows.Scan(
+			&item.MemoID,
+			&item.AttachmentID,
+			&item.AssociationEncryptionMetadata,
+		); err != nil {
+			return nil, err
+		}
+		result = append(result, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (s *SQLStore) UpdateMemoAttachmentAssociationEncryptionMetadata(
+	ctx context.Context,
+	memoID int64,
+	attachmentID int64,
+	associationEncryptionMetadata string,
+) error {
+	_, err := s.db.ExecContext(
+		ctx,
+		`UPDATE memo_attachments
+		SET association_encryption_metadata = ?
+		WHERE memo_id = ? AND attachment_id = ?`,
+		strings.TrimSpace(associationEncryptionMetadata),
+		memoID,
+		attachmentID,
+	)
+	return err
+}
+
 func (s *SQLStore) CreateAttachmentUploadSession(ctx context.Context, session models.AttachmentUploadSession) (models.AttachmentUploadSession, error) {
 	if session.ID == "" {
 		return models.AttachmentUploadSession{}, fmt.Errorf("upload session id is required")

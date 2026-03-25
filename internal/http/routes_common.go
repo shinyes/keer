@@ -211,11 +211,15 @@ func toAPIAttachment(
 		externalLink = strings.TrimSpace(attachment.ExternalLink)
 	}
 	thumbnailExternalLink := strings.TrimSpace(directThumbnailLink)
+	attachmentDescriptor := parseAttachmentEncryptionMetadata(strings.TrimSpace(attachment.EncryptionMetadata))
 	effectiveEncryptionMetadata := strings.TrimSpace(attachment.EncryptionMetadata)
 	if preferAssociationMetadata {
 		effectiveEncryptionMetadata = strings.TrimSpace(attachment.AssociationEncryptionMetadata)
 	}
 	descriptor := parseAttachmentEncryptionMetadata(effectiveEncryptionMetadata)
+	if preferAssociationMetadata && strings.TrimSpace(descriptor.ThumbnailBlobEncryption) == "" {
+		descriptor.ThumbnailBlobEncryption = strings.TrimSpace(attachmentDescriptor.ThumbnailBlobEncryption)
+	}
 	return apiAttachment{
 		Name:                    "attachments/" + models.Int64ToString(attachment.ID),
 		CreateTime:              formatTime(attachment.CreateTime),

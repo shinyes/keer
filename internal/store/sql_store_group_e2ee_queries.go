@@ -199,6 +199,58 @@ func (s *SQLStore) SetGroupMessageAttachments(ctx context.Context, messageID int
 	return tx.Commit()
 }
 
+func (s *SQLStore) ListGroupMessageAttachmentAssociationMetadataByAttachmentID(
+	ctx context.Context,
+	attachmentID int64,
+) ([]GroupMessageAttachmentAssociationMetadata, error) {
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT message_id, attachment_id, association_encryption_metadata
+		FROM group_message_attachments
+		WHERE attachment_id = ?`,
+		attachmentID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make([]GroupMessageAttachmentAssociationMetadata, 0)
+	for rows.Next() {
+		var item GroupMessageAttachmentAssociationMetadata
+		if err := rows.Scan(
+			&item.MessageID,
+			&item.AttachmentID,
+			&item.AssociationEncryptionMetadata,
+		); err != nil {
+			return nil, err
+		}
+		result = append(result, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (s *SQLStore) UpdateGroupMessageAttachmentAssociationEncryptionMetadata(
+	ctx context.Context,
+	messageID int64,
+	attachmentID int64,
+	associationEncryptionMetadata string,
+) error {
+	_, err := s.db.ExecContext(
+		ctx,
+		`UPDATE group_message_attachments
+		SET association_encryption_metadata = ?
+		WHERE message_id = ? AND attachment_id = ?`,
+		strings.TrimSpace(associationEncryptionMetadata),
+		messageID,
+		attachmentID,
+	)
+	return err
+}
+
 func (s *SQLStore) ListAttachmentsByGroupMessageIDs(ctx context.Context, messageIDs []int64) (map[int64][]models.Attachment, error) {
 	result := make(map[int64][]models.Attachment)
 	if len(messageIDs) == 0 {
