@@ -782,8 +782,15 @@ func recreateSyncEventTriggers(db *sql.DB) error {
 		`DROP TRIGGER IF EXISTS trg_sync_events_memo_tombstone_insert;`,
 		`DROP TRIGGER IF EXISTS trg_sync_events_user_insert;`,
 		`DROP TRIGGER IF EXISTS trg_sync_events_user_update;`,
+		`DROP TRIGGER IF EXISTS trg_sync_events_friendship_insert;`,
+		`DROP TRIGGER IF EXISTS trg_sync_events_friendship_delete;`,
 		`DROP TRIGGER IF EXISTS trg_sync_events_settings_insert;`,
 		`DROP TRIGGER IF EXISTS trg_sync_events_settings_update;`,
+		`DROP TRIGGER IF EXISTS trg_sync_events_settings_encryption_insert;`,
+		`DROP TRIGGER IF EXISTS trg_sync_events_settings_encryption_update;`,
+		`DROP TRIGGER IF EXISTS trg_sync_events_attachment_insert;`,
+		`DROP TRIGGER IF EXISTS trg_sync_events_attachment_update;`,
+		`DROP TRIGGER IF EXISTS trg_sync_events_attachment_delete;`,
 		`DROP TRIGGER IF EXISTS trg_sync_events_group_insert;`,
 		`DROP TRIGGER IF EXISTS trg_sync_events_group_update;`,
 		`DROP TRIGGER IF EXISTS trg_sync_events_group_delete;`,
@@ -793,6 +800,12 @@ func recreateSyncEventTriggers(db *sql.DB) error {
 		`DROP TRIGGER IF EXISTS trg_sync_events_group_message_insert;`,
 		`DROP TRIGGER IF EXISTS trg_sync_events_group_message_update;`,
 		`DROP TRIGGER IF EXISTS trg_sync_events_group_message_delete;`,
+		`DROP TRIGGER IF EXISTS trg_sync_events_group_key_version_insert;`,
+		`DROP TRIGGER IF EXISTS trg_sync_events_group_key_version_update;`,
+		`DROP TRIGGER IF EXISTS trg_sync_events_group_key_version_delete;`,
+		`DROP TRIGGER IF EXISTS trg_sync_events_group_key_recipient_insert;`,
+		`DROP TRIGGER IF EXISTS trg_sync_events_group_key_recipient_update;`,
+		`DROP TRIGGER IF EXISTS trg_sync_events_group_key_recipient_delete;`,
 	}
 	for _, stmt := range dropStmts {
 		if _, err := db.Exec(stmt); err != nil {
@@ -846,6 +859,34 @@ func recreateSyncEventTriggers(db *sql.DB) error {
 				'USERS', 'UPSERT', NEW.id, NEW.id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 			);
 		END;`,
+		`CREATE TRIGGER IF NOT EXISTS trg_sync_events_friendship_insert
+		AFTER INSERT ON friendships
+		BEGIN
+			INSERT INTO sync_events(
+				domain, action, actor_user_id, target_user_id, event_time
+			) VALUES (
+				'FRIENDSHIPS', 'UPSERT', NEW.user_id, NEW.friend_id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+			);
+			INSERT INTO sync_events(
+				domain, action, actor_user_id, target_user_id, event_time
+			) VALUES (
+				'FRIENDSHIPS', 'UPSERT', NEW.friend_id, NEW.user_id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+			);
+		END;`,
+		`CREATE TRIGGER IF NOT EXISTS trg_sync_events_friendship_delete
+		AFTER DELETE ON friendships
+		BEGIN
+			INSERT INTO sync_events(
+				domain, action, actor_user_id, target_user_id, event_time
+			) VALUES (
+				'FRIENDSHIPS', 'DELETE', OLD.user_id, OLD.friend_id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+			);
+			INSERT INTO sync_events(
+				domain, action, actor_user_id, target_user_id, event_time
+			) VALUES (
+				'FRIENDSHIPS', 'DELETE', OLD.friend_id, OLD.user_id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+			);
+		END;`,
 		`CREATE TRIGGER IF NOT EXISTS trg_sync_events_settings_insert
 		AFTER INSERT ON user_general_settings
 		BEGIN
@@ -862,6 +903,51 @@ func recreateSyncEventTriggers(db *sql.DB) error {
 				domain, action, actor_user_id, target_user_id, event_time
 			) VALUES (
 				'SETTINGS', 'UPSERT', NEW.user_id, NEW.user_id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+			);
+		END;`,
+		`CREATE TRIGGER IF NOT EXISTS trg_sync_events_settings_encryption_insert
+		AFTER INSERT ON user_encryption_keys
+		BEGIN
+			INSERT INTO sync_events(
+				domain, action, actor_user_id, target_user_id, event_time
+			) VALUES (
+				'SETTINGS_ENCRYPTION', 'UPSERT', NEW.user_id, NEW.user_id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+			);
+		END;`,
+		`CREATE TRIGGER IF NOT EXISTS trg_sync_events_settings_encryption_update
+		AFTER UPDATE ON user_encryption_keys
+		BEGIN
+			INSERT INTO sync_events(
+				domain, action, actor_user_id, target_user_id, event_time
+			) VALUES (
+				'SETTINGS_ENCRYPTION', 'UPSERT', NEW.user_id, NEW.user_id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+			);
+		END;`,
+		`CREATE TRIGGER IF NOT EXISTS trg_sync_events_attachment_insert
+		AFTER INSERT ON attachments
+		BEGIN
+			INSERT INTO sync_events(
+				domain, action, actor_user_id, target_user_id, memo_id, event_time
+			) VALUES (
+				'ATTACHMENTS', 'UPSERT', NEW.creator_id, NEW.creator_id, NEW.id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+			);
+		END;`,
+		`CREATE TRIGGER IF NOT EXISTS trg_sync_events_attachment_update
+		AFTER UPDATE ON attachments
+		BEGIN
+			INSERT INTO sync_events(
+				domain, action, actor_user_id, target_user_id, memo_id, event_time
+			) VALUES (
+				'ATTACHMENTS', 'UPSERT', NEW.creator_id, NEW.creator_id, NEW.id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+			);
+		END;`,
+		`CREATE TRIGGER IF NOT EXISTS trg_sync_events_attachment_delete
+		AFTER DELETE ON attachments
+		BEGIN
+			INSERT INTO sync_events(
+				domain, action, actor_user_id, target_user_id, memo_id, event_time
+			) VALUES (
+				'ATTACHMENTS', 'DELETE', OLD.creator_id, OLD.creator_id, OLD.id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 			);
 		END;`,
 		`CREATE TRIGGER IF NOT EXISTS trg_sync_events_group_insert
@@ -949,6 +1035,60 @@ func recreateSyncEventTriggers(db *sql.DB) error {
 				domain, action, actor_user_id, target_user_id, group_id, group_message_id, event_time
 			) VALUES (
 				'GROUP_MESSAGES', 'DELETE', OLD.creator_id, OLD.creator_id, OLD.group_id, OLD.id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+			);
+		END;`,
+		`CREATE TRIGGER IF NOT EXISTS trg_sync_events_group_key_version_insert
+		AFTER INSERT ON group_key_versions
+		BEGIN
+			INSERT INTO sync_events(
+				domain, action, group_id, group_message_id, event_time
+			) VALUES (
+				'GROUP_KEYS', 'UPSERT', NEW.group_id, NEW.version, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+			);
+		END;`,
+		`CREATE TRIGGER IF NOT EXISTS trg_sync_events_group_key_version_update
+		AFTER UPDATE ON group_key_versions
+		BEGIN
+			INSERT INTO sync_events(
+				domain, action, group_id, group_message_id, event_time
+			) VALUES (
+				'GROUP_KEYS', 'UPSERT', NEW.group_id, NEW.version, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+			);
+		END;`,
+		`CREATE TRIGGER IF NOT EXISTS trg_sync_events_group_key_version_delete
+		AFTER DELETE ON group_key_versions
+		BEGIN
+			INSERT INTO sync_events(
+				domain, action, group_id, group_message_id, event_time
+			) VALUES (
+				'GROUP_KEYS', 'DELETE', OLD.group_id, OLD.version, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+			);
+		END;`,
+		`CREATE TRIGGER IF NOT EXISTS trg_sync_events_group_key_recipient_insert
+		AFTER INSERT ON group_key_version_recipients
+		BEGIN
+			INSERT INTO sync_events(
+				domain, action, actor_user_id, target_user_id, group_id, group_message_id, event_time
+			) VALUES (
+				'GROUP_KEYS', 'UPSERT', NEW.user_id, NEW.user_id, NEW.group_id, NEW.version, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+			);
+		END;`,
+		`CREATE TRIGGER IF NOT EXISTS trg_sync_events_group_key_recipient_update
+		AFTER UPDATE ON group_key_version_recipients
+		BEGIN
+			INSERT INTO sync_events(
+				domain, action, actor_user_id, target_user_id, group_id, group_message_id, event_time
+			) VALUES (
+				'GROUP_KEYS', 'UPSERT', NEW.user_id, NEW.user_id, NEW.group_id, NEW.version, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+			);
+		END;`,
+		`CREATE TRIGGER IF NOT EXISTS trg_sync_events_group_key_recipient_delete
+		AFTER DELETE ON group_key_version_recipients
+		BEGIN
+			INSERT INTO sync_events(
+				domain, action, actor_user_id, target_user_id, group_id, group_message_id, event_time
+			) VALUES (
+				'GROUP_KEYS', 'UPSERT', OLD.user_id, OLD.user_id, OLD.group_id, OLD.version, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 			);
 		END;`,
 	}

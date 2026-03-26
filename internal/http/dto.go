@@ -104,6 +104,13 @@ type syncPullRequest struct {
 	Limit       int      `json:"limit"`
 }
 
+type syncStreamRequest struct {
+	Domains      []string `query:"domains"`
+	GroupScopes  []string `query:"groupScopes"`
+	ResumeCursor string   `query:"resumeCursor"`
+	Mode         string   `query:"mode"`
+}
+
 type syncPullResponse struct {
 	NextCursor string          `json:"nextCursor"`
 	HasMore    bool            `json:"hasMore"`
@@ -113,9 +120,12 @@ type syncPullResponse struct {
 type syncPullPatches struct {
 	Memos         syncPullMemoPatch          `json:"memos"`
 	Users         syncPullUserPatch          `json:"users"`
+	Friendships   syncPullFriendshipsPatch   `json:"friendships"`
 	Groups        syncPullGroupPatch         `json:"groups"`
 	GroupMessages syncPullGroupMessagesPatch `json:"groupMessages"`
+	Attachments   syncPullAttachmentsPatch   `json:"attachments"`
 	Settings      syncPullSettingsPatch      `json:"settings"`
+	GroupKeys     syncPullGroupKeysPatch     `json:"groupKeys"`
 }
 
 type syncPullMemoPatch struct {
@@ -127,6 +137,11 @@ type syncPullUserPatch struct {
 	Upserts []apiUser `json:"upserts"`
 }
 
+type syncPullFriendshipsPatch struct {
+	Upserts []apiUser `json:"upserts"`
+	Deletes []string  `json:"deletes"`
+}
+
 type syncPullGroupPatch struct {
 	Upserts []apiGroup `json:"upserts"`
 	Deletes []string   `json:"deletes"`
@@ -134,6 +149,11 @@ type syncPullGroupPatch struct {
 
 type syncPullGroupMessagesPatch struct {
 	Groups []syncPullGroupMessagesGroupPatch `json:"groups"`
+}
+
+type syncPullAttachmentsPatch struct {
+	Upserts []apiAttachment `json:"upserts"`
+	Deletes []string        `json:"deletes"`
 }
 
 type syncPullGroupMessagesGroupPatch struct {
@@ -145,7 +165,19 @@ type syncPullGroupMessagesGroupPatch struct {
 }
 
 type syncPullSettingsPatch struct {
-	GeneralSetting *generalSetting `json:"generalSetting,omitempty"`
+	GeneralSetting *generalSetting           `json:"generalSetting,omitempty"`
+	Encryption     *apiUserEncryptionSetting `json:"encryptionSetting,omitempty"`
+}
+
+type syncPullGroupKeysPatch struct {
+	Upserts []apiGroupKeyVersion `json:"upserts"`
+	Deletes []string             `json:"deletes"`
+}
+
+type syncStreamEventEnvelope struct {
+	SessionID string          `json:"sessionId"`
+	Cursor    string          `json:"cursor"`
+	Patches   syncPullPatches `json:"patches"`
 }
 
 type apiWrappedKeySlot struct {

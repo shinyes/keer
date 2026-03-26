@@ -57,6 +57,7 @@ func NewRouter(
 			return toAPIAttachment(attachment, memoName, "", "", true)
 		})
 	}
+	pullProcessor := newSyncPullProcessor(sqlStore, userService, memoService, groupService, buildAPIMemo)
 
 	app.Post("/api/v1/auth/signin", func(c *fiber.Ctx) error {
 		var req signInRequest
@@ -165,7 +166,8 @@ func NewRouter(
 	registerMemoRoutes(api, memoService, buildAPIMemo)
 	registerGroupRoutes(api, userService, groupService)
 	registerAdminRoutes(api, attachmentService)
-	registerSyncRoutes(api, sqlStore, userService, memoService, groupService, buildAPIMemo)
+	apiV2 := app.Group("/api/v2", AuthMiddleware(userService))
+	registerSyncStreamRoutes(apiV2, pullProcessor)
 
 	api.Get("/attachments", func(c *fiber.Ctx) error {
 		currentUser := CurrentUser(c)

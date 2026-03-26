@@ -198,17 +198,25 @@ type SyncDomain string
 const (
 	SyncDomainMemos         SyncDomain = "MEMOS"
 	SyncDomainUsers         SyncDomain = "USERS"
+	SyncDomainFriendships   SyncDomain = "FRIENDSHIPS"
 	SyncDomainGroups        SyncDomain = "GROUPS"
 	SyncDomainGroupMessages SyncDomain = "GROUP_MESSAGES"
+	SyncDomainAttachments   SyncDomain = "ATTACHMENTS"
 	SyncDomainSettings      SyncDomain = "SETTINGS"
+	SyncDomainSettingsE2EE  SyncDomain = "SETTINGS_ENCRYPTION"
+	SyncDomainGroupKeys     SyncDomain = "GROUP_KEYS"
 )
 
 func (d SyncDomain) IsValid() bool {
 	return d == SyncDomainMemos ||
 		d == SyncDomainUsers ||
+		d == SyncDomainFriendships ||
 		d == SyncDomainGroups ||
 		d == SyncDomainGroupMessages ||
-		d == SyncDomainSettings
+		d == SyncDomainAttachments ||
+		d == SyncDomainSettings ||
+		d == SyncDomainSettingsE2EE ||
+		d == SyncDomainGroupKeys
 }
 
 type SyncAction string
