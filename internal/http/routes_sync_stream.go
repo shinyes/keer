@@ -2,6 +2,7 @@ package http
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"strconv"
 	"strings"
@@ -24,6 +25,7 @@ func registerSyncStreamRoutes(api fiber.Router, pullProcessor syncPullProcessor)
 			cursor = "0"
 		}
 		sessionID := streamSessionID()
+		streamCtx := context.Background()
 
 		c.Context().SetBodyStreamWriter(func(w *bufio.Writer) {
 			if err := writeSSEEvent(w, "bootstrap_begin", syncStreamEventEnvelope{
@@ -39,7 +41,7 @@ func registerSyncStreamRoutes(api fiber.Router, pullProcessor syncPullProcessor)
 			bootstrapEnded := false
 			for {
 				response, err := pullProcessor.Compute(
-					c.Context(),
+					streamCtx,
 					currentUser,
 					syncPullRequest{
 						Cursor:      cursor,
