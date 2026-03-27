@@ -553,6 +553,89 @@ func TestCompleteAttachmentUploadSession_RollsBackAttachmentWhenMemoBindingFails
 	}
 }
 
+func TestCompleteAttachmentUploadSession_PersistsAssociationEncryptionMetadataForMemo(t *testing.T) {
+	services := setupTestServices(t)
+	localStore, err := storage.NewLocalStore(filepath.Join(t.TempDir(), "uploads"))
+	if err != nil {
+		t.Fatalf("NewLocalStore() error = %v", err)
+	}
+	attachmentService := NewAttachmentService(services.store, storage.NewRouter(storage.TypeLocal, localStore))
+	user := mustCreateUser(t, services.store, "attach-memo-association-meta")
+
+	createdMemo, err := services.memoService.CreateMemo(context.Background(), user.ID, CreateMemoInput{
+		Content:    "with-photo",
+		Visibility: models.VisibilityPrivate,
+	})
+	if err != nil {
+		t.Fatalf("CreateMemo() error = %v", err)
+	}
+
+	encryptionMetadata := mustBuildAttachmentMetadataJSON(t, map[string]any{
+		"descriptorCiphertext": "descriptor-main",
+		"descriptorEnvelope": map[string]any{
+			"wrappedKeys": []any{
+				map[string]any{
+					"slotType":      "account_master",
+					"slotRef":       "users/1",
+					"wrapAlgorithm": "AES_GCM_ACCOUNT_MASTER_KEY_V1",
+					"wrappedKey":    "wrapped-main",
+				},
+			},
+		},
+		"blobEncryption": "blob-main",
+	})
+
+	memoName := createdMemo.Memo.Name()
+	uploadData := []byte("jpeg-like-payload")
+	session, err := attachmentService.CreateAttachmentUploadSession(
+		context.Background(),
+		user.ID,
+		CreateAttachmentUploadSessionInput{
+			Filename:           "capture_picture.jpg",
+			Type:               "image/jpeg",
+			Size:               int64(len(uploadData)),
+			EncryptionMetadata: encryptionMetadata,
+			MemoName:           &memoName,
+		},
+	)
+	if err != nil {
+		t.Fatalf("CreateAttachmentUploadSession() error = %v", err)
+	}
+
+	if _, err := attachmentService.AppendAttachmentUploadChunk(
+		context.Background(),
+		user.ID,
+		session.ID,
+		0,
+		uploadData,
+	); err != nil {
+		t.Fatalf("AppendAttachmentUploadChunk() error = %v", err)
+	}
+
+	attachment, err := attachmentService.CompleteAttachmentUploadSession(context.Background(), user.ID, session.ID)
+	if err != nil {
+		t.Fatalf("CompleteAttachmentUploadSession() error = %v", err)
+	}
+
+	attachedMap, err := services.store.ListAttachmentsByMemoIDs(context.Background(), []int64{createdMemo.Memo.ID})
+	if err != nil {
+		t.Fatalf("ListAttachmentsByMemoIDs() error = %v", err)
+	}
+	attached := attachedMap[createdMemo.Memo.ID]
+	if len(attached) != 1 {
+		t.Fatalf("expected 1 memo attachment, got %d", len(attached))
+	}
+	if attached[0].ID != attachment.ID {
+		t.Fatalf("expected attached attachment id %d, got %d", attachment.ID, attached[0].ID)
+	}
+	if attached[0].AssociationEncryptionMetadata != encryptionMetadata {
+		t.Fatalf(
+			"expected association encryption metadata to match attachment metadata, got %q",
+			attached[0].AssociationEncryptionMetadata,
+		)
+	}
+}
+
 func TestMultipartSessionPathEncodeDecode_RoundTrip(t *testing.T) {
 	encoded := encodeMultipartSessionPath(
 		"attachments/1/demo|video.mp4",

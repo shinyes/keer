@@ -215,7 +215,7 @@ func (s *AttachmentService) CreateAttachment(ctx context.Context, userID int64, 
 	}
 
 	if memoID != nil {
-		if err := s.attachToMemo(ctx, *memoID, attachment.ID); err != nil {
+		if err := s.attachToMemo(ctx, *memoID, attachment); err != nil {
 			return models.Attachment{}, s.rollbackCreatedAttachment(ctx, userID, attachment.ID, err)
 		}
 	}
@@ -802,7 +802,7 @@ func (s *AttachmentService) CompleteAttachmentUploadSession(ctx context.Context,
 		if err != nil {
 			return models.Attachment{}, s.rollbackCreatedAttachment(ctx, userID, attachment.ID, err)
 		}
-		if err := s.attachToMemo(ctx, memoID, attachment.ID); err != nil {
+		if err := s.attachToMemo(ctx, memoID, attachment); err != nil {
 			return models.Attachment{}, s.rollbackCreatedAttachment(ctx, userID, attachment.ID, err)
 		}
 	}
@@ -871,7 +871,7 @@ func (s *AttachmentService) completeDirectAttachmentUploadSession(
 		if err != nil {
 			return models.Attachment{}, s.rollbackCreatedAttachment(ctx, userID, attachment.ID, err)
 		}
-		if err := s.attachToMemo(ctx, memoID, attachment.ID); err != nil {
+		if err := s.attachToMemo(ctx, memoID, attachment); err != nil {
 			return models.Attachment{}, s.rollbackCreatedAttachment(ctx, userID, attachment.ID, err)
 		}
 	}
@@ -943,7 +943,7 @@ func (s *AttachmentService) completeMultipartAttachmentUploadSession(
 		if err != nil {
 			return models.Attachment{}, s.rollbackCreatedAttachment(ctx, userID, attachment.ID, err)
 		}
-		if err := s.attachToMemo(ctx, memoID, attachment.ID); err != nil {
+		if err := s.attachToMemo(ctx, memoID, attachment); err != nil {
 			return models.Attachment{}, s.rollbackCreatedAttachment(ctx, userID, attachment.ID, err)
 		}
 	}
@@ -1192,7 +1192,7 @@ func hashAttachmentContent(data []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func (s *AttachmentService) attachToMemo(ctx context.Context, memoID int64, attachmentID int64) error {
+func (s *AttachmentService) attachToMemo(ctx context.Context, memoID int64, attachment models.Attachment) error {
 	attachedMap, err := s.store.ListAttachmentsByMemoIDs(ctx, []int64{memoID})
 	if err != nil {
 		return err
@@ -1209,8 +1209,11 @@ func (s *AttachmentService) attachToMemo(ctx context.Context, memoID int64, atta
 		})
 		seen[item.ID] = struct{}{}
 	}
-	if _, ok := seen[attachmentID]; !ok {
-		attachments = append(attachments, store.AttachmentBinding{AttachmentID: attachmentID})
+	if _, ok := seen[attachment.ID]; !ok {
+		attachments = append(attachments, store.AttachmentBinding{
+			AttachmentID:                  attachment.ID,
+			AssociationEncryptionMetadata: strings.TrimSpace(attachment.EncryptionMetadata),
+		})
 	}
 	return s.store.SetMemoAttachments(ctx, memoID, attachments)
 }
