@@ -449,7 +449,7 @@ func (p syncPullProcessor) Compute(
 			}
 			response.Patches.Attachments.Upserts = append(
 				response.Patches.Attachments.Upserts,
-				toAPIAttachment(attachment, "", "", "", true),
+				toAPIAttachment(attachment, "", "", "", false),
 			)
 		}
 		for _, attachmentID := range sortedInt64Keys(attachmentDeleteIDs) {
