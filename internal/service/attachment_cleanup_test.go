@@ -3,13 +3,17 @@ package service
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/shinyes/keer/internal/models"
 	"github.com/shinyes/keer/internal/storage"
+	"github.com/shinyes/keer/internal/store"
 )
 
 type memoryCleanupStore struct {
@@ -84,9 +88,10 @@ func TestCleanupOrphanFiles_LocalStoreRemovesOnlyUnreferencedManagedKeys(t *test
 	thumbnailKey := "attachments/1/referenced.thumb.bin"
 	avatarKey := avatarStorageKey(user.ID)
 	orphanAttachmentKey := "attachments/1/orphan.bin"
+	orphanThumbnailKey := "attachments/1/orphan.thumb.bin"
 	orphanAvatarKey := "avatars/orphan.bin"
 
-	attachment, err := services.store.CreateAttachment(
+	referencedAttachment, err := services.store.CreateAttachment(
 		ctx,
 		user.ID,
 		"referenced.bin",
@@ -103,7 +108,7 @@ func TestCleanupOrphanFiles_LocalStoreRemovesOnlyUnreferencedManagedKeys(t *test
 	}
 	if err := services.store.UpdateAttachmentThumbnail(
 		ctx,
-		attachment.ID,
+		referencedAttachment.ID,
 		"referenced.thumb.bin",
 		"image/jpeg",
 		4,
@@ -111,6 +116,54 @@ func TestCleanupOrphanFiles_LocalStoreRemovesOnlyUnreferencedManagedKeys(t *test
 		thumbnailKey,
 	); err != nil {
 		t.Fatalf("UpdateAttachmentThumbnail() error = %v", err)
+	}
+	memo, err := services.store.CreateMemo(
+		ctx,
+		user.ID,
+		"memo-content",
+		"",
+		models.VisibilityPrivate,
+		models.MemoStateNormal,
+		false,
+		models.MemoPayload{},
+		nowUTC(),
+		nil,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("CreateMemo() error = %v", err)
+	}
+	if err := services.store.SetMemoAttachments(ctx, memo.ID, []store.AttachmentBinding{
+		{AttachmentID: referencedAttachment.ID},
+	}); err != nil {
+		t.Fatalf("SetMemoAttachments() error = %v", err)
+	}
+
+	orphanAttachment, err := services.store.CreateAttachment(
+		ctx,
+		user.ID,
+		"orphan.bin",
+		"",
+		"application/octet-stream",
+		4,
+		"hash-orphan-local",
+		"",
+		storage.TypeLocal,
+		orphanAttachmentKey,
+	)
+	if err != nil {
+		t.Fatalf("CreateAttachment() orphan error = %v", err)
+	}
+	if err := services.store.UpdateAttachmentThumbnail(
+		ctx,
+		orphanAttachment.ID,
+		"orphan.thumb.bin",
+		"image/jpeg",
+		4,
+		storage.TypeLocal,
+		orphanThumbnailKey,
+	); err != nil {
+		t.Fatalf("UpdateAttachmentThumbnail() orphan error = %v", err)
 	}
 	if _, err := services.store.UpdateUserAvatar(ctx, user.ID, avatarPublicURL(user.ID), storage.TypeLocal); err != nil {
 		t.Fatalf("UpdateUserAvatar() error = %v", err)
@@ -128,6 +181,9 @@ func TestCleanupOrphanFiles_LocalStoreRemovesOnlyUnreferencedManagedKeys(t *test
 	if _, err := localStore.Put(ctx, orphanAttachmentKey, "application/octet-stream", []byte("orphan")); err != nil {
 		t.Fatalf("Put orphan attachment error = %v", err)
 	}
+	if _, err := localStore.Put(ctx, orphanThumbnailKey, "image/jpeg", []byte("orphan-thumb")); err != nil {
+		t.Fatalf("Put orphan thumbnail error = %v", err)
+	}
 	if _, err := localStore.Put(ctx, orphanAvatarKey, "image/png", []byte("orphan")); err != nil {
 		t.Fatalf("Put orphan avatar error = %v", err)
 	}
@@ -139,11 +195,11 @@ func TestCleanupOrphanFiles_LocalStoreRemovesOnlyUnreferencedManagedKeys(t *test
 	if err != nil {
 		t.Fatalf("CleanupOrphanFiles() error = %v", err)
 	}
-	if result.ScannedKeys != 5 {
-		t.Fatalf("expected scanned=5, got %d", result.ScannedKeys)
+	if result.ScannedKeys != 6 {
+		t.Fatalf("expected scanned=6, got %d", result.ScannedKeys)
 	}
-	if result.DeletedKeys != 2 {
-		t.Fatalf("expected deleted=2, got %d", result.DeletedKeys)
+	if result.DeletedKeys != 3 {
+		t.Fatalf("expected deleted=3, got %d", result.DeletedKeys)
 	}
 	if result.FailedKeys != 0 {
 		t.Fatalf("expected failed=0, got %d", result.FailedKeys)
@@ -153,8 +209,16 @@ func TestCleanupOrphanFiles_LocalStoreRemovesOnlyUnreferencedManagedKeys(t *test
 	assertStoreHasKey(t, localStore, thumbnailKey)
 	assertStoreHasKey(t, localStore, avatarKey)
 	assertStoreMissingKey(t, localStore, orphanAttachmentKey)
+	assertStoreMissingKey(t, localStore, orphanThumbnailKey)
 	assertStoreMissingKey(t, localStore, orphanAvatarKey)
 	assertStoreHasKey(t, localStore, "misc/not-managed.txt")
+
+	if _, err := services.store.GetAttachmentByID(ctx, orphanAttachment.ID); err != sql.ErrNoRows {
+		t.Fatalf("expected orphan attachment row deleted, got err=%v", err)
+	}
+	if _, err := services.store.GetAttachmentByID(ctx, referencedAttachment.ID); err != nil {
+		t.Fatalf("expected referenced attachment row retained, got err=%v", err)
+	}
 }
 
 func TestCleanupOrphanFiles_MixedStoresPreservesReferencedKeysAcrossBackends(t *testing.T) {
@@ -175,9 +239,10 @@ func TestCleanupOrphanFiles_MixedStoresPreservesReferencedKeysAcrossBackends(t *
 	s3ThumbnailKey := "attachments/1/local.thumb.bin"
 	s3AvatarKey := avatarStorageKey(user.ID)
 	localOrphanKey := "attachments/1/orphan-local.bin"
+	s3OrphanThumbnailKey := "attachments/1/orphan-s3-thumb.bin"
 	s3OrphanKey := "avatars/orphan-s3.bin"
 
-	attachment, err := services.store.CreateAttachment(
+	referencedAttachment, err := services.store.CreateAttachment(
 		ctx,
 		user.ID,
 		"local.bin",
@@ -194,7 +259,7 @@ func TestCleanupOrphanFiles_MixedStoresPreservesReferencedKeysAcrossBackends(t *
 	}
 	if err := services.store.UpdateAttachmentThumbnail(
 		ctx,
-		attachment.ID,
+		referencedAttachment.ID,
 		"local.thumb.bin",
 		"image/jpeg",
 		4,
@@ -202,6 +267,54 @@ func TestCleanupOrphanFiles_MixedStoresPreservesReferencedKeysAcrossBackends(t *
 		s3ThumbnailKey,
 	); err != nil {
 		t.Fatalf("UpdateAttachmentThumbnail() error = %v", err)
+	}
+	memo, err := services.store.CreateMemo(
+		ctx,
+		user.ID,
+		"memo-content",
+		"",
+		models.VisibilityPrivate,
+		models.MemoStateNormal,
+		false,
+		models.MemoPayload{},
+		nowUTC(),
+		nil,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("CreateMemo() error = %v", err)
+	}
+	if err := services.store.SetMemoAttachments(ctx, memo.ID, []store.AttachmentBinding{
+		{AttachmentID: referencedAttachment.ID},
+	}); err != nil {
+		t.Fatalf("SetMemoAttachments() error = %v", err)
+	}
+
+	orphanAttachment, err := services.store.CreateAttachment(
+		ctx,
+		user.ID,
+		"orphan-local.bin",
+		"",
+		"application/octet-stream",
+		4,
+		"hash-mixed-orphan",
+		"",
+		storage.TypeLocal,
+		localOrphanKey,
+	)
+	if err != nil {
+		t.Fatalf("CreateAttachment() orphan error = %v", err)
+	}
+	if err := services.store.UpdateAttachmentThumbnail(
+		ctx,
+		orphanAttachment.ID,
+		"orphan-s3-thumb.bin",
+		"image/jpeg",
+		4,
+		storage.TypeS3,
+		s3OrphanThumbnailKey,
+	); err != nil {
+		t.Fatalf("UpdateAttachmentThumbnail() orphan error = %v", err)
 	}
 	if _, err := services.store.UpdateUserAvatar(ctx, user.ID, avatarPublicURL(user.ID), storage.TypeS3); err != nil {
 		t.Fatalf("UpdateUserAvatar() error = %v", err)
@@ -219,6 +332,9 @@ func TestCleanupOrphanFiles_MixedStoresPreservesReferencedKeysAcrossBackends(t *
 	if _, err := s3Store.Put(ctx, s3AvatarKey, "image/png", []byte("avatar")); err != nil {
 		t.Fatalf("Put s3 referenced avatar error = %v", err)
 	}
+	if _, err := s3Store.Put(ctx, s3OrphanThumbnailKey, "image/jpeg", []byte("orphan-thumb")); err != nil {
+		t.Fatalf("Put s3 orphan thumbnail error = %v", err)
+	}
 	if _, err := s3Store.Put(ctx, s3OrphanKey, "image/png", []byte("orphan")); err != nil {
 		t.Fatalf("Put s3 orphan error = %v", err)
 	}
@@ -227,11 +343,11 @@ func TestCleanupOrphanFiles_MixedStoresPreservesReferencedKeysAcrossBackends(t *
 	if err != nil {
 		t.Fatalf("CleanupOrphanFiles() error = %v", err)
 	}
-	if result.ScannedKeys != 5 {
-		t.Fatalf("expected scanned=5, got %d", result.ScannedKeys)
+	if result.ScannedKeys != 6 {
+		t.Fatalf("expected scanned=6, got %d", result.ScannedKeys)
 	}
-	if result.DeletedKeys != 2 {
-		t.Fatalf("expected deleted=2, got %d", result.DeletedKeys)
+	if result.DeletedKeys != 3 {
+		t.Fatalf("expected deleted=3, got %d", result.DeletedKeys)
 	}
 	if result.FailedKeys != 0 {
 		t.Fatalf("expected failed=0, got %d", result.FailedKeys)
@@ -241,7 +357,95 @@ func TestCleanupOrphanFiles_MixedStoresPreservesReferencedKeysAcrossBackends(t *
 	assertStoreMissingKey(t, localStore, localOrphanKey)
 	assertStoreHasKey(t, s3Store, s3ThumbnailKey)
 	assertStoreHasKey(t, s3Store, s3AvatarKey)
+	assertStoreMissingKey(t, s3Store, s3OrphanThumbnailKey)
 	assertStoreMissingKey(t, s3Store, s3OrphanKey)
+
+	if _, err := services.store.GetAttachmentByID(ctx, orphanAttachment.ID); err != sql.ErrNoRows {
+		t.Fatalf("expected orphan attachment row deleted, got err=%v", err)
+	}
+	if _, err := services.store.GetAttachmentByID(ctx, referencedAttachment.ID); err != nil {
+		t.Fatalf("expected referenced attachment row retained, got err=%v", err)
+	}
+}
+
+func TestCleanupOrphanFiles_PreservesGroupReferencedAttachment(t *testing.T) {
+	services := setupTestServices(t)
+	localStore, err := storage.NewLocalStore(filepath.Join(t.TempDir(), "uploads"))
+	if err != nil {
+		t.Fatalf("NewLocalStore() error = %v", err)
+	}
+	attachmentService := NewAttachmentService(services.store, storage.NewRouter(storage.TypeLocal, localStore))
+	ctx := context.Background()
+	user := mustCreateUser(t, services.store, "cleanup-group-user")
+
+	groupAttachmentKey := "attachments/1/group.bin"
+	groupThumbnailKey := "attachments/1/group.thumb.bin"
+	groupAttachment, err := services.store.CreateAttachment(
+		ctx,
+		user.ID,
+		"group.bin",
+		"",
+		"application/octet-stream",
+		4,
+		"hash-group",
+		"",
+		storage.TypeLocal,
+		groupAttachmentKey,
+	)
+	if err != nil {
+		t.Fatalf("CreateAttachment() error = %v", err)
+	}
+	if err := services.store.UpdateAttachmentThumbnail(
+		ctx,
+		groupAttachment.ID,
+		"group.thumb.bin",
+		"image/jpeg",
+		4,
+		storage.TypeLocal,
+		groupThumbnailKey,
+	); err != nil {
+		t.Fatalf("UpdateAttachmentThumbnail() error = %v", err)
+	}
+
+	group, err := services.store.CreateGroup(ctx, user.ID, "cleanup-group", "desc")
+	if err != nil {
+		t.Fatalf("CreateGroup() error = %v", err)
+	}
+	if _, err := services.store.CreateGroupMessage(
+		ctx,
+		group.ID,
+		user.ID,
+		"hello",
+		"",
+		nil,
+		[]store.AttachmentBinding{{AttachmentID: groupAttachment.ID}},
+	); err != nil {
+		t.Fatalf("CreateGroupMessage() error = %v", err)
+	}
+
+	if _, err := localStore.Put(ctx, groupAttachmentKey, "application/octet-stream", []byte("group")); err != nil {
+		t.Fatalf("Put group attachment error = %v", err)
+	}
+	if _, err := localStore.Put(ctx, groupThumbnailKey, "image/jpeg", []byte("group-thumb")); err != nil {
+		t.Fatalf("Put group thumbnail error = %v", err)
+	}
+
+	result, err := attachmentService.CleanupOrphanFiles(ctx)
+	if err != nil {
+		t.Fatalf("CleanupOrphanFiles() error = %v", err)
+	}
+	if result.DeletedKeys != 0 {
+		t.Fatalf("expected no deleted keys for group referenced attachment, got %d", result.DeletedKeys)
+	}
+	assertStoreHasKey(t, localStore, groupAttachmentKey)
+	assertStoreHasKey(t, localStore, groupThumbnailKey)
+	if _, err := services.store.GetAttachmentByID(ctx, groupAttachment.ID); err != nil {
+		t.Fatalf("expected group referenced attachment row retained, got err=%v", err)
+	}
+}
+
+func nowUTC() time.Time {
+	return time.Now().UTC()
 }
 
 func assertStoreHasKey(t *testing.T, store storage.Store, key string) {

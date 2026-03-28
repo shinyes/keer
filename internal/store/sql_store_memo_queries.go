@@ -1216,8 +1216,52 @@ func (s *SQLStore) ListAllAttachments(ctx context.Context) ([]models.Attachment,
 	return result, rows.Err()
 }
 
+func (s *SQLStore) ListUnattachedAttachments(ctx context.Context) ([]models.Attachment, error) {
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT a.id, a.creator_id, a.filename, a.external_link, a.type, a.size, a.encryption_metadata, a.storage_type, a.storage_key, a.thumbnail_filename, a.thumbnail_type, a.thumbnail_size, a.thumbnail_storage_type, a.thumbnail_storage_key, a.create_time
+		FROM attachments a
+		WHERE NOT EXISTS (
+			SELECT 1 FROM memo_attachments ma WHERE ma.attachment_id = a.id
+		)
+		AND NOT EXISTS (
+			SELECT 1 FROM group_message_attachments gma WHERE gma.attachment_id = a.id
+		)
+		ORDER BY a.id DESC`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make([]models.Attachment, 0)
+	for rows.Next() {
+		attachment, err := scanAttachment(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, attachment)
+	}
+	return result, rows.Err()
+}
+
 func (s *SQLStore) DeleteAttachment(ctx context.Context, attachmentID int64) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM attachments WHERE id = ?`, attachmentID)
+	return err
+}
+
+func (s *SQLStore) DeleteAttachmentsByIDs(ctx context.Context, attachmentIDs []int64) error {
+	if len(attachmentIDs) == 0 {
+		return nil
+	}
+	placeholders := make([]string, 0, len(attachmentIDs))
+	args := make([]any, 0, len(attachmentIDs))
+	for _, attachmentID := range attachmentIDs {
+		placeholders = append(placeholders, "?")
+		args = append(args, attachmentID)
+	}
+	query := `DELETE FROM attachments WHERE id IN (` + strings.Join(placeholders, ",") + `)`
+	_, err := s.db.ExecContext(ctx, query, args...)
 	return err
 }
 

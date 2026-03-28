@@ -1521,6 +1521,20 @@ func (s *AttachmentService) listContiguousMultipartParts(
 }
 
 func (s *AttachmentService) CleanupOrphanFiles(ctx context.Context) (StorageCleanupResult, error) {
+	unattachedAttachments, err := s.store.ListUnattachedAttachments(ctx)
+	if err != nil {
+		return StorageCleanupResult{}, err
+	}
+	if len(unattachedAttachments) > 0 {
+		attachmentIDs := make([]int64, 0, len(unattachedAttachments))
+		for _, attachment := range unattachedAttachments {
+			attachmentIDs = append(attachmentIDs, attachment.ID)
+		}
+		if err := s.store.DeleteAttachmentsByIDs(ctx, attachmentIDs); err != nil {
+			return StorageCleanupResult{}, err
+		}
+	}
+
 	referencedByType := make(map[string]map[string]struct{})
 	addReference := func(storeType string, key string) {
 		normalizedType := storage.NormalizeType(storeType)
