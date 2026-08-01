@@ -109,19 +109,50 @@ func (p syncPullProcessor) Compute(
 		},
 	}
 
-	events, err := p.sqlStore.ListSyncEvents(ctx, cursor, domains, limit)
-	if err != nil {
-		return syncPullResponse{}, err
+	// Descending（反向拉取）：初次全量时游标为 0，从最新事件反向拉，保证"新→旧"顺序。
+	var events []models.SyncEvent
+	var tailCursor int64
+	if req.Descending {
+		beforeID := cursor
+		if beforeID <= 0 {
+			maxID, err := p.sqlStore.GetMaxSyncEventID(ctx, domains)
+			if err != nil {
+				return syncPullResponse{}, err
+			}
+			beforeID = maxID
+			tailCursor = maxID
+		}
+		response.TailCursor = models.Int64ToString(tailCursor)
+		if beforeID > 0 {
+			events, err = p.sqlStore.ListSyncEventsDescending(ctx, beforeID, domains, limit)
+			if err != nil {
+				return syncPullResponse{}, err
+			}
+		}
+	} else {
+		events, err = p.sqlStore.ListSyncEvents(ctx, cursor, domains, limit)
+		if err != nil {
+			return syncPullResponse{}, err
+		}
 	}
 
 	nextCursor := cursor
 	for _, event := range events {
-		if event.ID > nextCursor {
+		if req.Descending {
+			if nextCursor == cursor || event.ID < nextCursor {
+				nextCursor = event.ID
+			}
+		} else if event.ID > nextCursor {
 			nextCursor = event.ID
 		}
 	}
 	response.NextCursor = models.Int64ToString(nextCursor)
-	hasMore, err := p.sqlStore.HasSyncEventsAfter(ctx, nextCursor, domains)
+	var hasMore bool
+	if req.Descending {
+		hasMore, err = p.sqlStore.HasSyncEventsBefore(ctx, nextCursor, domains)
+	} else {
+		hasMore, err = p.sqlStore.HasSyncEventsAfter(ctx, nextCursor, domains)
+	}
 	if err != nil {
 		return syncPullResponse{}, err
 	}
@@ -276,6 +307,12 @@ func (p syncPullProcessor) Compute(
 			for _, item := range items {
 				visibleIDs[item.Memo.ID] = struct{}{}
 				response.Patches.Memos.Upserts = append(response.Patches.Memos.Upserts, p.buildAPIMemo(item))
+			}
+			if req.Descending {
+				// 反向拉取时让同批 memo 也按创建时间"新→旧"，与列表展示方向一致。
+				sort.Slice(response.Patches.Memos.Upserts, func(i, j int) bool {
+					return response.Patches.Memos.Upserts[i].CreateTime > response.Patches.Memos.Upserts[j].CreateTime
+				})
 			}
 			for _, memoID := range upsertIDs {
 				if _, visible := visibleIDs[memoID]; !visible {

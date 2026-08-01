@@ -118,6 +118,140 @@ func (s *SQLStore) HasSyncEventsAfter(
 	return false, err
 }
 
+// ListSyncEventsDescending 返回指定上界之前（含上界）的同步事件，按 id 从新到旧排序。
+// 用于初次登录的"最新优先"全量拉取：先从 MAX(id) 反向拉，客户端优先展示最新内容。
+func (s *SQLStore) ListSyncEventsDescending(
+	ctx context.Context,
+	beforeID int64,
+	domains []models.SyncDomain,
+	limit int,
+) ([]models.SyncEvent, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	if limit > 2000 {
+		limit = 2000
+	}
+
+	var queryBuilder strings.Builder
+	queryBuilder.WriteString(`
+		SELECT
+			id,
+			domain,
+			action,
+			actor_user_id,
+			target_user_id,
+			group_id,
+			memo_id,
+			group_message_id,
+			event_time
+		FROM sync_events
+		WHERE id <= ?
+	`)
+	args := []any{beforeID}
+	domainFilter, domainArgs := buildSyncDomainFilter(domains)
+	if domainFilter != "" {
+		queryBuilder.WriteString(" AND ")
+		queryBuilder.WriteString(domainFilter)
+		args = append(args, domainArgs...)
+	}
+	queryBuilder.WriteString(" ORDER BY id DESC LIMIT ?")
+	query := queryBuilder.String()
+	args = append(args, limit)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make([]models.SyncEvent, 0, limit)
+	for rows.Next() {
+		var event models.SyncEvent
+		var domain string
+		var action string
+		var eventTimeRaw string
+		if err := rows.Scan(
+			&event.ID,
+			&domain,
+			&action,
+			&event.ActorUserID,
+			&event.TargetUserID,
+			&event.GroupID,
+			&event.MemoID,
+			&event.GroupMessageID,
+			&eventTimeRaw,
+		); err != nil {
+			return nil, err
+		}
+		event.Domain = models.SyncDomain(strings.TrimSpace(domain))
+		event.Action = models.SyncAction(strings.ToUpper(strings.TrimSpace(action)))
+		if !event.Action.IsValid() {
+			event.Action = models.SyncActionUpsert
+		}
+		eventTime, err := parseTime(eventTimeRaw)
+		if err != nil {
+			return nil, err
+		}
+		event.EventTime = eventTime
+		result = append(result, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// GetMaxSyncEventID 返回满足域过滤条件的最大同步事件 id；无事件时返回 0。
+func (s *SQLStore) GetMaxSyncEventID(
+	ctx context.Context,
+	domains []models.SyncDomain,
+) (int64, error) {
+	var queryBuilder strings.Builder
+	queryBuilder.WriteString("SELECT COALESCE(MAX(id), 0) FROM sync_events")
+	args := []any{}
+	domainFilter, domainArgs := buildSyncDomainFilter(domains)
+	if domainFilter != "" {
+		queryBuilder.WriteString(" WHERE ")
+		queryBuilder.WriteString(domainFilter)
+		args = append(args, domainArgs...)
+	}
+	var maxID int64
+	if err := s.db.QueryRowContext(ctx, queryBuilder.String(), args...).Scan(&maxID); err != nil {
+		return 0, err
+	}
+	return maxID, nil
+}
+
+// HasSyncEventsBefore 判断指定 id 之前是否还有（满足域过滤的）同步事件。
+func (s *SQLStore) HasSyncEventsBefore(
+	ctx context.Context,
+	beforeID int64,
+	domains []models.SyncDomain,
+) (bool, error) {
+	var queryBuilder strings.Builder
+	queryBuilder.WriteString("SELECT 1 FROM sync_events WHERE id < ?")
+	args := []any{beforeID}
+	domainFilter, domainArgs := buildSyncDomainFilter(domains)
+	if domainFilter != "" {
+		queryBuilder.WriteString(" AND ")
+		queryBuilder.WriteString(domainFilter)
+		args = append(args, domainArgs...)
+	}
+	queryBuilder.WriteString(" LIMIT 1")
+	query := queryBuilder.String()
+
+	var marker int
+	err := s.db.QueryRowContext(ctx, query, args...).Scan(&marker)
+	if err == nil {
+		return true, nil
+	}
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return false, err
+}
+
 func buildSyncDomainFilter(domains []models.SyncDomain) (string, []any) {
 	normalized := make([]string, 0, len(domains))
 	seen := map[models.SyncDomain]struct{}{}

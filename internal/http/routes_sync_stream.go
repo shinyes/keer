@@ -24,6 +24,9 @@ func registerSyncStreamRoutes(api fiber.Router, pullProcessor syncPullProcessor)
 		if cursor == "" {
 			cursor = "0"
 		}
+		// 初次全量（无已有游标）默认反向拉取，保证"从新到旧"；有游标时正向增量。
+		descending := req.ResumeCursor == "" || strings.TrimSpace(req.ResumeCursor) == "0"
+		var tailCursor string
 		sessionID := streamSessionID()
 		streamCtx := context.Background()
 
@@ -48,6 +51,7 @@ func registerSyncStreamRoutes(api fiber.Router, pullProcessor syncPullProcessor)
 						Domains:     req.Domains,
 						GroupScopes: req.GroupScopes,
 						Limit:       syncStreamChunkLimit,
+						Descending:  descending,
 					},
 				)
 				if err != nil {
@@ -64,6 +68,9 @@ func registerSyncStreamRoutes(api fiber.Router, pullProcessor syncPullProcessor)
 					continue
 				}
 
+				if descending && tailCursor == "" && strings.TrimSpace(response.TailCursor) != "" {
+					tailCursor = strings.TrimSpace(response.TailCursor)
+				}
 				cursor = strings.TrimSpace(response.NextCursor)
 				if cursor == "" {
 					cursor = "0"
@@ -88,9 +95,13 @@ func registerSyncStreamRoutes(api fiber.Router, pullProcessor syncPullProcessor)
 
 				if !response.HasMore && !bootstrapEnded {
 					bootstrapEnded = true
+					endCursor := cursor
+					if descending && tailCursor != "" {
+						endCursor = tailCursor
+					}
 					if err := writeSSEEvent(w, "bootstrap_end", syncStreamEventEnvelope{
 						SessionID: sessionID,
-						Cursor:    cursor,
+						Cursor:    endCursor,
 					}); err != nil {
 						return
 					}
@@ -99,6 +110,12 @@ func registerSyncStreamRoutes(api fiber.Router, pullProcessor syncPullProcessor)
 					}
 					if req.Mode == "bootstrap" {
 						return
+					}
+					if descending {
+						// 反向历史拉完，切换到正向增量（增量游标 = 反向起点）。
+						descending = false
+						cursor = endCursor
+						continue
 					}
 				} else if err := w.Flush(); err != nil {
 					return

@@ -102,6 +102,8 @@ type syncPullRequest struct {
 	Domains     []string `json:"domains"`
 	GroupScopes []string `json:"groupScopes"`
 	Limit       int      `json:"limit"`
+	// Descending 表示按事件 id 从新到旧反向拉取（初次全量"最新优先"）。
+	Descending bool `json:"descending"`
 }
 
 type syncStreamRequest struct {
@@ -114,6 +116,9 @@ type syncStreamRequest struct {
 type syncPullResponse struct {
 	NextCursor string          `json:"nextCursor"`
 	HasMore    bool            `json:"hasMore"`
+	// TailCursor 仅反向（desc）拉取时有效：表示本次会话的增量起点（=起始 MAX(id)），
+	// 用于反向拉完历史后切换到正向增量。
+	TailCursor string          `json:"tailCursor"`
 	Patches    syncPullPatches `json:"patches"`
 }
 
