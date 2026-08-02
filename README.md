@@ -311,13 +311,22 @@ Authorization: Bearer <accessToken>
 - `GET /api/v1/users/batch`
 - `GET /api/v1/users/changes`（保留）
 
-同步接口：
+同步接口（SSE 流式）：
 
-- `POST /api/v1/sync/pull`
-  - 请求体：`cursor`、`domains`、`groupScopes`、`limit`
-  - 响应体：`nextCursor`、`hasMore`、`patches{memos,users,groups,groupMessages,settings}`
-  - `patches.groupMessages.groups[*]` 采用增量补丁：`upserts` / `deletes` / `tags` / `hasUnread`
-  - 同步域：`MEMOS` / `USERS` / `GROUPS` / `GROUP_MESSAGES` / `SETTINGS`
+- `GET /api/v2/sync/stream`（需 `Authorization: Bearer <accessToken>`）
+  - 查询参数：
+    - `resumeCursor`：断点游标；**为空或 `0` 表示初次全量**
+    - `domains`：逗号分隔的同步域
+    - `groupScopes`：群组范围（可选）
+    - `mode`：`bootstrap` / `tail`
+  - 返回 `text/event-stream`，事件类型：
+    - `patch`：一批变更（`nextCursor` + `patches`）
+    - `checkpoint`：游标确认点
+    - `bootstrap_end`：历史全量结束
+  - `patches` 字段：`memos` / `users` / `friendships` / `groups` / `groupMessages` / `attachments` / `settings` / `groupKeys`
+  - `groupMessages.groups[*]` 采用增量补丁：`upserts` / `deletes` / `tags` / `hasUnread`
+  - **初次全量默认新→旧**：`resumeCursor` 为空/`0` 时从最新事件反向拉取，客户端优先看到最新内容；拉完历史后自动切换正向增量
+  - 同步域：`MEMOS` / `USERS` / `FRIENDSHIPS` / `GROUPS` / `GROUP_MESSAGES` / `ATTACHMENTS` / `SETTINGS` / `SETTINGS_ENCRYPTION` / `GROUP_KEYS`
 
 Memo 接口：
 
